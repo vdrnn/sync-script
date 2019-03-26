@@ -110,6 +110,15 @@ $ ./sync.sh production staging
 $ ./sync.sh staging production
 ```
 
+### Local development without VM (Valet, etc.)
+
+The `--local` flag can be passed at the end of the arguments to skip using WP-CLI aliases for development. This means that you can use the sync script on a local development setup such as Valet.
+
+```sh
+# Sync production down to development
+$ ./sync.sh production development --local
+```
+
 ## Troubleshooting
 
 ### Unable to connect to development
