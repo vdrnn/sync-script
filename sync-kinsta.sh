@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Syncing Trellis & Bedrock-based WordPress environments with WP-CLI aliases (Kinsta version)
+# Version 1.1.0
 # Copyright (c) Ben Word
 
 DEVDIR="web/app/uploads/"
