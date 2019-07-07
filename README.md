@@ -8,6 +8,8 @@ Create a new `scripts/` directory in your Bedrock directory (`site/`) and place 
 
 Make sure that `sync.sh` is executable (`chmod u+x sync.sh`).
 
+**WP-CLI must be installed on all environments (local and remote).**
+
 ## Configuration
 
 Edit the variables at the top of `sync.sh` to match the settings for your environments:
