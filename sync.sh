@@ -4,21 +4,15 @@
 # Version 1.2.0
 # Copyright (c) Ben Word
 
-##
- # Configuration
- ##
 DEVDIR="web/app/uploads/"
-DEVSITE="http://example.test"
+DEVSITE="https://example.test"
 
-PRODDIR="web@prod.example.com:/srv/www/example.com/shared/uploads/"
+PRODDIR="web@example.com:/srv/www/example.com/shared/uploads/"
 PRODSITE="https://example.com"
 
 STAGDIR="web@staging.example.com:/srv/www/example.com/shared/uploads/"
 STAGSITE="https://staging.example.com"
 
-##
- # Do not edit below this line
- ##
 LOCAL=false
 NO_DB=false
 NO_ASSETS=false
@@ -136,28 +130,26 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
   availto
 
   # Export/import database, run search & replace
-  #if [[ "$LOCAL" = true && $TO == "development" ]]; then
-  #  wp db export &&
-  #  wp db reset --yes &&
-  #  wp "@$FROM" db export - | wp db import - &&
-  #  wp search-replace "$FROMSITE" "$TOSITE"
-  #elif [[ "$LOCAL" = true && $FROM == "development" ]]; then
-  #  wp "@$TO" db export &&
-  #  wp "@$TO" db reset --yes &&
-  #  wp db export - | wp "@$TO" db import - &&
-  #  wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
-  #else
-  #  wp "@$TO" db export &&
-  #  wp "@$TO" db reset --yes &&
-  #  wp "@$FROM" db export - | wp "@$TO" db import - &&
-  #  wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
-  #fi
+  if [[ "$LOCAL" = true && $TO == "development" ]]; then
+    wp db export &&
+    wp db reset --yes &&
+    wp "@$FROM" db export - | wp db import - &&
+    wp search-replace "$FROMSITE" "$TOSITE"
+  elif [[ "$LOCAL" = true && $FROM == "development" ]]; then
+    wp "@$TO" db export &&
+    wp "@$TO" db reset --yes &&
+    wp db export - | wp "@$TO" db import - &&
+    wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
+  else
+    wp "@$TO" db export &&
+    wp "@$TO" db reset --yes &&
+    wp "@$FROM" db export - | wp "@$TO" db import - &&
+    wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
+  fi
 
   if [ "$NO_DB" = false ]
   then
   echo "Syncing database..."
-    # Added exclude tables option
-    # Export/import database, run search & replace
     if [[ "$LOCAL" = true && $TO == "development" ]]; then
       wp db export &&
       wp db reset --yes &&
