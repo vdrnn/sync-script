@@ -114,17 +114,27 @@ $ ./sync.sh staging production
 
 ### Skipping database or assets during sync
 
-The `--skip-db` flag can be passed at the end of the arguments to skip syncing the database.
+The `--skip-db` flag can be passed to skip syncing the database.
 
-The `--skip-assets` flag can be passed at the end of the arguments to skip syncing assets.
-
-### Local development without VM (Valet, etc.)
-
-The `--local` flag can be passed at the end of the arguments to skip using WP-CLI aliases for development. This means that you can use the sync script on a local development setup such as Valet.
+The `--skip-assets` flag can be passed to skip syncing assets.
 
 ```sh
 # Sync production down to development
-$ ./sync.sh production development --local
+$ ./sync.sh --skip-db production development
+```
+
+```sh
+# Sync production down to development
+$ ./sync.sh --skip-assets production development
+```
+
+### Local development without VM (Valet, etc.)
+
+The `--local` flag can be passed to skip using WP-CLI aliases for development. This means that you can use the sync script on a local development setup such as Valet.
+
+```sh
+# Sync production down to development
+$ ./sync.sh --local production development
 ```
 
 ## Troubleshooting
