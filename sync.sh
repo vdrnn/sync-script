@@ -134,17 +134,17 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
     wp db export --default-character-set=utf8mb4 &&
     wp db reset --yes &&
     wp "@$FROM" db export --default-character-set=utf8mb4 - | wp db import - &&
-    wp search-replace "$FROMSITE" "$TOSITE"
+    wp search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix
   elif [[ "$LOCAL" = true && $FROM == "development" ]]; then
     wp "@$TO" db export --default-character-set=utf8mb4 &&
     wp "@$TO" db reset --yes &&
     wp db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
-    wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
+    wp "@$TO" search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix
   else
     wp "@$TO" db export --default-character-set=utf8mb4 &&
     wp "@$TO" db reset --yes &&
     wp "@$FROM" db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
-    wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
+    wp "@$TO" search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix
   fi
 
   if [ "$NO_DB" = false ]
@@ -154,17 +154,17 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
       wp db export --default-character-set=utf8mb4 &&
       wp db reset --yes &&
       wp "@$FROM" db export --default-character-set=utf8mb4 - | wp db import - &&
-      wp search-replace "$FROMSITE" "$TOSITE"
+      wp search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix
     elif [[ "$LOCAL" = true && $FROM == "development" ]]; then
       wp "@$TO" db export --default-character-set=utf8mb4 &&
       wp "@$TO" db reset --yes &&
       wp db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
-      wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
+      wp "@$TO" search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix
     else
       wp "@$TO" db export --default-character-set=utf8mb4 &&
       wp "@$TO" db reset --yes &&
       wp "@$FROM" db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
-      wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
+      wp "@$TO" search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix
     fi
   fi
 
