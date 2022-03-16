@@ -131,19 +131,19 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
 
   # Export/import database, run search & replace
   if [[ "$LOCAL" = true && $TO == "development" ]]; then
-    wp db export &&
+    wp db export --default-character-set=utf8mb4 &&
     wp db reset --yes &&
-    wp "@$FROM" db export - | wp db import - &&
+    wp "@$FROM" db export --default-character-set=utf8mb4 - | wp db import - &&
     wp search-replace "$FROMSITE" "$TOSITE"
   elif [[ "$LOCAL" = true && $FROM == "development" ]]; then
-    wp "@$TO" db export &&
+    wp "@$TO" db export --default-character-set=utf8mb4 &&
     wp "@$TO" db reset --yes &&
-    wp db export - | wp "@$TO" db import - &&
+    wp db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
     wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
   else
-    wp "@$TO" db export &&
+    wp "@$TO" db export --default-character-set=utf8mb4 &&
     wp "@$TO" db reset --yes &&
-    wp "@$FROM" db export - | wp "@$TO" db import - &&
+    wp "@$FROM" db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
     wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
   fi
 
@@ -151,19 +151,19 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
   then
   echo "Syncing database..."
     if [[ "$LOCAL" = true && $TO == "development" ]]; then
-      wp db export &&
+      wp db export --default-character-set=utf8mb4 &&
       wp db reset --yes &&
-      wp "@$FROM" db export - | wp db import - &&
+      wp "@$FROM" db export --default-character-set=utf8mb4 - | wp db import - &&
       wp search-replace "$FROMSITE" "$TOSITE"
     elif [[ "$LOCAL" = true && $FROM == "development" ]]; then
-      wp "@$TO" db export &&
+      wp "@$TO" db export --default-character-set=utf8mb4 &&
       wp "@$TO" db reset --yes &&
-      wp db export - | wp "@$TO" db import - &&
+      wp db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
       wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
     else
-      wp "@$TO" db export &&
+      wp "@$TO" db export --default-character-set=utf8mb4 &&
       wp "@$TO" db reset --yes &&
-      wp "@$FROM" db export - | wp "@$TO" db import - &&
+      wp "@$FROM" db export --default-character-set=utf8mb4 - | wp "@$TO" db import - &&
       wp "@$TO" search-replace "$FROMSITE" "$TOSITE"
     fi
   fi
