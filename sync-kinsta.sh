@@ -10,7 +10,7 @@ DEVPORT="22"
 
 REMOTEDIR="example@1.2.3.4:/www/example_123/public/shared/uploads/"
 
-PORDPORT="12345"
+PRODPORT="12345"
 PRODSITE="https://example.com"
 
 STAGPORT="54321"
