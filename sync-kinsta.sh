@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Syncing Trellis & Bedrock-based WordPress environments with WP-CLI aliases
+# Syncing Trellis & Bedrock-based WordPress environments with WP-CLI aliases (Kinsta version)
 # Version 1.2.0
 # Copyright (c) Ben Word
 
