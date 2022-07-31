@@ -1,3 +1,7 @@
+### 1.3.0: August 1st, 2022
+* Change `—no-db`, `—no-assets` to `—skip-db`, `—skip-assets`, props @joshuafredrickson
+* Remove redundant `db export`/`import`, props @joshuafredrickson
+
 ### 1.2.0: March 16th, 2022
 * Add support for optionally skipping the database or assets with new flags: `--no-db` and `--no-assets`
 * Pass `--default-character-set=utf8mb4` to `wp db export`
