@@ -22,10 +22,10 @@ Install via Composer:
 composer require vdrnn/acorn-sync
 ```
 
-Publish the configuration file:
+Clear Acorn cache to register the commands:
 
 ```bash
-wp acorn vendor:publish --tag="acorn-sync"
+wp acorn optimize:clear
 ```
 
 ## Quick Start

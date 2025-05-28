@@ -36,10 +36,6 @@ class SyncServiceProvider extends ServiceProvider
                 SyncStatusCommand::class,
                 SyncConfigCommand::class,
             ]);
-
-            $this->publishes([
-                __DIR__ . '/../config/sync.php' => config_path('sync.php'),
-            ], 'acorn-sync');
         }
     }
 }

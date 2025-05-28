@@ -3,7 +3,7 @@
 namespace Vdrnn\AcornSync\Services;
 
 use Illuminate\Support\Facades\Config;
-use Illuminate\Support\Facades\Process;
+use Symfony\Component\Process\Process;
 use Symfony\Component\Yaml\Yaml;
 use Exception;
 
@@ -32,12 +32,14 @@ class SyncService
         $alias = $config['wp_cli_alias'];
 
         if ($alias) {
-            $result = Process::run("wp {$alias} option get home");
+            $process = Process::fromShellCommandline("wp {$alias} option get home");
         } else {
-            $result = Process::run("wp option get home");
+            $process = Process::fromShellCommandline("wp option get home");
         }
 
-        return $result->successful() && !str_contains($result->output(), 'Error');
+        $process->run();
+
+        return $process->isSuccessful() && !str_contains($process->getOutput(), 'Error');
     }
 
     /**
@@ -54,27 +56,31 @@ class SyncService
         $toCmd = $this->getWpCliCommand($to, $useLocal);
 
         // Export backup of target database
-        $backupResult = Process::run("{$toCmd} db export --default-character-set={$charset}");
-        if (!$backupResult->successful()) {
-            throw new Exception("Failed to backup {$to} database: " . $backupResult->errorOutput());
+        $backupProcess = Process::fromShellCommandline("{$toCmd} db export --default-character-set={$charset}");
+        $backupProcess->run();
+        if (!$backupProcess->isSuccessful()) {
+            throw new Exception("Failed to backup {$to} database: " . $backupProcess->getErrorOutput());
         }
 
         // Reset target database
-        $resetResult = Process::run("{$toCmd} db reset --yes");
-        if (!$resetResult->successful()) {
-            throw new Exception("Failed to reset {$to} database: " . $resetResult->errorOutput());
+        $resetProcess = Process::fromShellCommandline("{$toCmd} db reset --yes");
+        $resetProcess->run();
+        if (!$resetProcess->isSuccessful()) {
+            throw new Exception("Failed to reset {$to} database: " . $resetProcess->getErrorOutput());
         }
 
         // Import from source to target
-        $importResult = Process::run("{$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import -");
-        if (!$importResult->successful()) {
-            throw new Exception("Failed to import database: " . $importResult->errorOutput());
+        $importProcess = Process::fromShellCommandline("{$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import -");
+        $importProcess->run();
+        if (!$importProcess->isSuccessful()) {
+            throw new Exception("Failed to import database: " . $importProcess->getErrorOutput());
         }
 
         // Search and replace URLs
-        $searchReplaceResult = Process::run("{$toCmd} search-replace \"{$fromConfig['url']}\" \"{$toConfig['url']}\" --all-tables-with-prefix");
-        if (!$searchReplaceResult->successful()) {
-            throw new Exception("Failed to search-replace URLs: " . $searchReplaceResult->errorOutput());
+        $searchReplaceProcess = Process::fromShellCommandline("{$toCmd} search-replace \"{$fromConfig['url']}\" \"{$toConfig['url']}\" --all-tables-with-prefix");
+        $searchReplaceProcess->run();
+        if (!$searchReplaceProcess->isSuccessful()) {
+            throw new Exception("Failed to search-replace URLs: " . $searchReplaceProcess->getErrorOutput());
         }
 
         return true;
@@ -109,9 +115,10 @@ class SyncService
     public function setUploadsPermissions(string $path = 'web/app/uploads/'): bool
     {
         $permissions = Config::get('sync.options.upload_permissions', '755');
-        $result = Process::run("chmod -R {$permissions} {$path}");
+        $process = Process::fromShellCommandline("chmod -R {$permissions} {$path}");
+        $process->run();
 
-        return $result->successful();
+        return $process->isSuccessful();
     }
 
     /**
@@ -125,9 +132,10 @@ class SyncService
 
         $command = "ssh -o ForwardAgent=yes {$fromParts['host']} \"rsync -aze 'ssh {$sshOptions}' --progress {$fromParts['path']} {$toParts['host']}:{$toParts['path']}\"";
 
-        $result = Process::run($command);
+        $process = Process::fromShellCommandline($command);
+        $process->run();
 
-        return $result->successful();
+        return $process->isSuccessful();
     }
 
     /**
@@ -138,9 +146,10 @@ class SyncService
         $fromPath = $fromConfig['uploads_path'];
         $toPath = $toConfig['uploads_path'];
 
-        $result = Process::run("rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"");
+        $process = Process::fromShellCommandline("rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"");
+        $process->run();
 
-        return $result->successful();
+        return $process->isSuccessful();
     }
 
     /**
@@ -223,15 +232,16 @@ class SyncService
             ],
         ];
 
-        $result = Process::run([
+        $process = new Process([
             'curl',
             '-X', 'POST',
             '-H', 'Content-type: application/json',
             '--data', json_encode($payload),
             $webhookUrl,
         ]);
+        $process->run();
 
-        return $result->successful();
+        return $process->isSuccessful();
     }
 
     /**
@@ -239,9 +249,10 @@ class SyncService
      */
     public function getCurrentUser(): string
     {
-        $result = Process::run('git config user.name');
+        $process = Process::fromShellCommandline('git config user.name');
+        $process->run();
 
-        return $result->successful() ? trim($result->output()) : 'Unknown';
+        return $process->isSuccessful() ? trim($process->getOutput()) : 'Unknown';
     }
 
     /**
@@ -249,7 +260,8 @@ class SyncService
      */
     public function updateWpCliConfig(array $environments): bool
     {
-        $wpCliPath = base_path(Config::get('sync.wp_cli.config_file', 'wp-cli.yml'));
+        // Always use the Bedrock root wp-cli.yml, not theme folder
+        $wpCliPath = base_path('wp-cli.yml');
 
         // Backup existing config if enabled
         if (Config::get('sync.wp_cli.backup_config_before_update', true) && file_exists($wpCliPath)) {
@@ -259,13 +271,19 @@ class SyncService
         // Read existing config
         $config = file_exists($wpCliPath) ? Yaml::parseFile($wpCliPath) : [];
 
+        // Add development alias if not exists
+        if (!isset($config['@development'])) {
+            $config['@development'] = [
+                'path' => 'web/wp',
+            ];
+        }
+
         // Add aliases for remote environments
         foreach ($environments as $name => $envConfig) {
             if ($envConfig['wp_cli_alias'] && isset($envConfig['ssh_host'], $envConfig['remote_path'])) {
-                $aliasName = ltrim($envConfig['wp_cli_alias'], '@');
                 $config[$envConfig['wp_cli_alias']] = [
                     'ssh' => $envConfig['ssh_host'],
-                    'path' => $envConfig['remote_path'],
+                    'path' => $envConfig['remote_path'] . '/web/wp',
                 ];
             }
         }
