@@ -12,6 +12,11 @@
 
 ### Added
 - **Laravel-style configuration** - Config now uses `env()` helpers with fallback defaults
+- **Automatic sync.sh migration** - Intelligently migrates from bash script to Laravel configuration
+  - Recursively searches project for sync.sh file
+  - Parses URLs, uploads paths, and Slack webhooks from bash variables
+  - Merges with wp-cli.yml SSH configuration for best of both
+  - Safely backs up original sync.sh to sync.sh.backup
 - WordPress native function integration - Uses `wp_upload_dir()` for better compatibility
 - SSH connection details (host, port, remote_path) now written to `.env` file
 - `--debug` flag for `sync:status` command with detailed error reporting

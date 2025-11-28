@@ -486,4 +486,55 @@ class SyncService
             'remote_path' => null,
         ];
     }
+
+    /**
+     * Parse sync.sh bash script to extract environment configuration.
+     *
+     * @param string $syncShPath Path to sync.sh file
+     * @return array|null Parsed configuration or null if file doesn't exist
+     */
+    public function parseSyncShConfig(string $syncShPath): ?array
+    {
+        if (!file_exists($syncShPath)) {
+            return null;
+        }
+
+        $content = file_get_contents($syncShPath);
+        $config = [
+            'development' => [],
+            'staging' => [],
+            'production' => [],
+        ];
+
+        // Parse development environment
+        if (preg_match('/DEVDIR="([^"]+)"/', $content, $matches)) {
+            $config['development']['uploads_path'] = $matches[1];
+        }
+        if (preg_match('/DEVSITE="([^"]+)"/', $content, $matches)) {
+            $config['development']['url'] = $matches[1];
+        }
+
+        // Parse staging environment
+        if (preg_match('/STAGDIR="([^"]+)"/', $content, $matches)) {
+            $config['staging']['uploads_path'] = $matches[1];
+        }
+        if (preg_match('/STAGSITE="([^"]+)"/', $content, $matches)) {
+            $config['staging']['url'] = $matches[1];
+        }
+
+        // Parse production environment
+        if (preg_match('/PRODDIR="([^"]+)"/', $content, $matches)) {
+            $config['production']['uploads_path'] = $matches[1];
+        }
+        if (preg_match('/PRODSITE="([^"]+)"/', $content, $matches)) {
+            $config['production']['url'] = $matches[1];
+        }
+
+        // Parse Slack webhook (optional)
+        if (preg_match('/https:\/\/hooks\.slack\.com\/services\/[^\s"\']+/', $content, $matches)) {
+            $config['slack_webhook'] = $matches[0];
+        }
+
+        return $config;
+    }
 }

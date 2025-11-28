@@ -40,11 +40,32 @@ class SyncInitCommand extends Command
             }
         }
 
-        // Try to auto-detect from wp-cli.yml
-        $wpCliConfig = $this->detectWpCliConfig($syncService);
+        // Detect existing configuration sources
+        $this->info('🔍 Detecting existing configuration...');
+        $this->newLine();
 
-        // Collect environment data
-        $environments = $this->collectEnvironmentData($syncService, $wpCliConfig);
+        $wpCliConfig = $this->detectWpCliConfig($syncService);
+        $syncShConfig = $this->detectSyncShConfig($syncService);
+
+        // Show what was found
+        $foundSources = [];
+        if ($wpCliConfig) {
+            $foundSources[] = 'wp-cli.yml (SSH connection details)';
+        }
+        if ($syncShConfig) {
+            $foundSources[] = 'sync.sh (URLs and uploads paths)';
+        }
+
+        if (!empty($foundSources)) {
+            $this->line('<info>Found:</info>');
+            foreach ($foundSources as $source) {
+                $this->line("  ✓ {$source}");
+            }
+            $this->newLine();
+        }
+
+        // Collect environment data (merges wp-cli.yml and sync.sh intelligently)
+        $environments = $this->collectEnvironmentData($syncService, $wpCliConfig, $syncShConfig);
 
         // Update configuration file
         if (!$this->updateConfigFile($environments)) {
@@ -60,6 +81,25 @@ class SyncInitCommand extends Command
         // Update .env file
         if ($this->confirm('Update .env file with environment variables?', true)) {
             $this->updateEnvFile($environments, $syncService);
+        }
+
+        // Offer to backup/remove sync.sh if it was detected
+        if ($syncShConfig && isset($syncShConfig['_sync_sh_path'])) {
+            $this->newLine();
+            $this->info('📦 Migration from sync.sh complete!');
+            $this->newLine();
+
+            $syncShPath = $syncShConfig['_sync_sh_path'];
+            $relativePath = str_replace($syncService->getProjectRoot() . '/', '', $syncShPath);
+
+            if ($this->confirm("Remove {$relativePath}? (it will be backed up to {$relativePath}.backup)", true)) {
+                $backupPath = $syncShPath . '.backup';
+                if (rename($syncShPath, $backupPath)) {
+                    $this->line("✅ Moved {$relativePath} to {$relativePath}.backup");
+                } else {
+                    $this->warn("⚠️  Could not move {$relativePath}. Please remove it manually.");
+                }
+            }
         }
 
         $this->newLine();
@@ -121,6 +161,42 @@ class SyncInitCommand extends Command
     }
 
     /**
+     * Detect existing sync.sh configuration by searching the project.
+     */
+    protected function detectSyncShConfig(SyncService $syncService): ?array
+    {
+        $projectRoot = $syncService->getProjectRoot();
+
+        // Search for sync.sh anywhere in the project (excluding vendor, node_modules, etc.)
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($projectRoot, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+
+        foreach ($iterator as $file) {
+            // Skip directories and non-sync.sh files
+            if ($file->isDir() || $file->getFilename() !== 'sync.sh') {
+                continue;
+            }
+
+            // Skip vendor, node_modules, and hidden directories
+            $path = $file->getPathname();
+            if (preg_match('#/(vendor|node_modules|\.git|\.)|/\.|^\.|^\.#', $path)) {
+                continue;
+            }
+
+            // Found sync.sh, parse it
+            $config = $syncService->parseSyncShConfig($path);
+            if ($config) {
+                $config['_sync_sh_path'] = $path; // Store path for later backup/removal
+                return $config;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Detect the default uploads path using WordPress's wp_upload_dir().
      * Returns a relative path from the project root.
      */
@@ -146,9 +222,9 @@ class SyncInitCommand extends Command
     }
 
     /**
-     * Collect environment data from user input.
+     * Collect environment data from user input, merging wp-cli.yml and sync.sh config.
      */
-    protected function collectEnvironmentData(SyncService $syncService, ?array $wpCliConfig = null): array
+    protected function collectEnvironmentData(SyncService $syncService, ?array $wpCliConfig = null, ?array $syncShConfig = null): array
     {
         $this->info('📝 Environment Configuration');
         $this->line('Please provide the following information for each environment:');
@@ -159,10 +235,12 @@ class SyncInitCommand extends Command
         // Development environment
         $this->comment('Development Environment:');
 
-        $devUrl = env('WP_HOME', 'https://example.test');
+        $devUrl = $syncShConfig['development']['url'] ?? env('WP_HOME', 'https://example.test');
+        $devUploads = $syncShConfig['development']['uploads_path'] ?? $this->getDefaultUploadsPath($syncService);
+
         $environments['development'] = [
             'url' => $this->ask('Site URL', $devUrl),
-            'uploads_path' => $this->ask('Uploads directory path', $this->getDefaultUploadsPath($syncService)),
+            'uploads_path' => $this->ask('Uploads directory path', $devUploads),
             'wp_cli_alias' => null,
         ];
         $this->newLine();
@@ -172,7 +250,8 @@ class SyncInitCommand extends Command
         $stagingDetected = $wpCliConfig['staging'] ?? null;
 
         if ($stagingDetected && $this->option('auto')) {
-            $environments['staging'] = $this->buildEnvironmentFromWpCli('staging', $stagingDetected, $syncService);
+            // Merge wp-cli.yml (SSH/paths) with sync.sh (URLs)
+            $environments['staging'] = $this->buildEnvironmentFromWpCli('staging', $stagingDetected, $syncService, $syncShConfig);
         } else {
             $stagingUrl = $this->ask('Site URL (leave empty to skip staging)');
             if ($stagingUrl) {
@@ -201,7 +280,7 @@ class SyncInitCommand extends Command
         $productionDetected = $wpCliConfig['production'] ?? null;
 
         if ($productionDetected && $this->option('auto')) {
-            $environments['production'] = $this->buildEnvironmentFromWpCli('production', $productionDetected, $syncService);
+            $environments['production'] = $this->buildEnvironmentFromWpCli('production', $productionDetected, $syncService, $syncShConfig);
         } else {
             $productionUrl = $this->ask('Site URL (leave empty to skip production)');
             if ($productionUrl) {
@@ -228,9 +307,9 @@ class SyncInitCommand extends Command
     }
 
     /**
-     * Build environment configuration from wp-cli.yml data.
+     * Build environment configuration from wp-cli.yml data, merging with sync.sh if available.
      */
-    protected function buildEnvironmentFromWpCli(string $name, array $wpCliData, SyncService $syncService): array
+    protected function buildEnvironmentFromWpCli(string $name, array $wpCliData, SyncService $syncService, ?array $syncShConfig = null): array
     {
         $sshHost = $wpCliData['ssh'] ?? null;
         $remotePath = $wpCliData['path'] ?? null;
@@ -274,9 +353,13 @@ class SyncInitCommand extends Command
             ? $sshHost . ':' . rtrim($remotePath, '/') . '/' . $uploadsSubPath
             : $uploadsSubPath;
 
+        // Merge with sync.sh config if available
+        $defaultUrl = $syncShConfig[$name]['url'] ?? "https://{$name}.example.com";
+        $defaultUploads = $syncShConfig[$name]['uploads_path'] ?? $uploadsPath;
+
         return [
-            'url' => $this->ask("URL for {$name}", "https://{$name}.example.com"),
-            'uploads_path' => $uploadsPath,
+            'url' => $this->ask("URL for {$name}", $defaultUrl),
+            'uploads_path' => $defaultUploads,
             'wp_cli_alias' => "@{$name}",
             'ssh_host' => $sshHost,
             'ssh_port' => $sshPort,

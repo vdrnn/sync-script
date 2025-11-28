@@ -53,6 +53,30 @@ wp acorn optimize:clear
    wp acorn sync:env production development
    ```
 
+## Migrating from sync.sh
+
+If you're currently using the original [roots/sync-script](https://github.com/roots/sync-script/) bash script, Acorn Sync can automatically migrate your configuration!
+
+**How it works:**
+
+1. Run `wp acorn sync:init --auto --force`
+2. The package will automatically:
+   - ✅ Detect your existing `sync.sh` file (searches project recursively)
+   - ✅ Parse URLs and uploads paths from the script
+   - ✅ Merge with `wp-cli.yml` SSH configuration
+   - ✅ Generate Laravel-style configuration files
+   - ✅ Safely backup `sync.sh` to `sync.sh.backup`
+
+**What gets migrated:**
+- `DEVSITE`, `STAGSITE`, `PRODSITE` → Environment URLs
+- `DEVDIR`, `STAGDIR`, `PRODDIR` → Uploads paths
+- Slack webhook URLs (if configured)
+
+**Smart merging:**
+- SSH/remote paths come from `wp-cli.yml` (more reliable)
+- URLs and uploads come from `sync.sh` (if different from auto-detected paths)
+- You get the best of both configurations!
+
 ## Setup Workflow
 
 ### Recommended Process
