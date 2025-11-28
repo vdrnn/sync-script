@@ -15,7 +15,8 @@ class SyncInitCommand extends Command
      * The name and signature of the console command.
      */
     protected $signature = 'sync:init
-                           {--force : Overwrite existing configuration}';
+                           {--force : Overwrite existing configuration}
+                           {--auto : Auto-detect configuration from wp-cli.yml}';
 
     /**
      * The console command description.
@@ -39,11 +40,17 @@ class SyncInitCommand extends Command
             }
         }
 
+        // Try to auto-detect from wp-cli.yml
+        $wpCliConfig = $this->detectWpCliConfig();
+
         // Collect environment data
-        $environments = $this->collectEnvironmentData();
+        $environments = $this->collectEnvironmentData($wpCliConfig);
 
         // Update configuration file
-        $this->updateConfigFile($environments);
+        if (!$this->updateConfigFile($environments)) {
+            $this->error('Failed to create configuration file.');
+            return 1;
+        }
 
         // Update wp-cli.yml
         if ($this->confirm('Update wp-cli.yml with remote aliases?', true)) {
@@ -68,9 +75,47 @@ class SyncInitCommand extends Command
     }
 
     /**
+     * Detect existing wp-cli.yml configuration.
+     */
+    protected function detectWpCliConfig(): ?array
+    {
+        $wpCliPath = base_path('wp-cli.yml');
+        if (!File::exists($wpCliPath)) {
+            return null;
+        }
+
+        try {
+            $config = Yaml::parseFile($wpCliPath);
+
+            if (empty($config)) {
+                return null;
+            }
+
+            $detected = [];
+            foreach ($config as $key => $value) {
+                if (str_starts_with($key, '@')) {
+                    $envName = ltrim($key, '@');
+                    $detected[$envName] = $value;
+                }
+            }
+
+            if (!empty($detected)) {
+                $this->info('✅ Detected existing wp-cli.yml configuration');
+                $this->line('Found environments: ' . implode(', ', array_keys($detected)));
+                $this->newLine();
+            }
+
+            return $detected;
+        } catch (Exception $e) {
+            $this->warn('Could not parse wp-cli.yml: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Collect environment data from user input.
      */
-    protected function collectEnvironmentData(): array
+    protected function collectEnvironmentData(?array $wpCliConfig = null): array
     {
         $this->info('📝 Environment Configuration');
         $this->line('Please provide the following information for each environment:');
@@ -80,8 +125,10 @@ class SyncInitCommand extends Command
 
         // Development environment
         $this->comment('Development Environment:');
+
+        $devUrl = env('WP_HOME', 'https://example.test');
         $environments['development'] = [
-            'url' => $this->ask('Site URL', 'https://example.test'),
+            'url' => $this->ask('Site URL', $devUrl),
             'uploads_path' => $this->ask('Uploads directory path', 'web/app/uploads/'),
             'wp_cli_alias' => null,
         ];
@@ -89,50 +136,97 @@ class SyncInitCommand extends Command
 
         // Staging environment
         $this->comment('Staging Environment:');
-        $stagingUrl = $this->ask('Site URL (leave empty to skip staging)');
-        if ($stagingUrl) {
-            $stagingUploads = $this->ask(
-                'Uploads path with SSH (e.g., web@staging.example.com:/srv/www/example.com/shared/uploads/)'
-            );
+        $stagingDetected = $wpCliConfig['staging'] ?? null;
 
-            $remoteDetails = $this->extractRemoteDetails($stagingUploads);
+        if ($stagingDetected && $this->option('auto')) {
+            $environments['staging'] = $this->buildEnvironmentFromWpCli('staging', $stagingDetected);
+        } else {
+            $stagingUrl = $this->ask('Site URL (leave empty to skip staging)');
+            if ($stagingUrl) {
+                $stagingUploads = $this->ask(
+                    'Uploads path with SSH (e.g., web@staging.example.com:/srv/www/example.com/shared/uploads/)'
+                );
 
-            $environments['staging'] = [
-                'url' => $stagingUrl,
-                'uploads_path' => $stagingUploads,
-                'wp_cli_alias' => '@staging',
-                'ssh_host' => $remoteDetails['ssh_host'],
-                'remote_path' => $remoteDetails['remote_path'],
-            ];
+                $sshPort = $this->ask('SSH port (leave empty for default 22)', '22');
+
+                $remoteDetails = $this->extractRemoteDetails($stagingUploads, $sshPort);
+
+                $environments['staging'] = [
+                    'url' => $stagingUrl,
+                    'uploads_path' => $stagingUploads,
+                    'wp_cli_alias' => '@staging',
+                    'ssh_host' => $remoteDetails['ssh_host'],
+                    'ssh_port' => $remoteDetails['ssh_port'],
+                    'remote_path' => $remoteDetails['remote_path'],
+                ];
+            }
         }
         $this->newLine();
 
         // Production environment
         $this->comment('Production Environment:');
-        $productionUrl = $this->ask('Site URL (leave empty to skip production)');
-        if ($productionUrl) {
-            $productionUploads = $this->ask(
-                'Uploads path with SSH (e.g., web@example.com:/srv/www/example.com/shared/uploads/)'
-            );
+        $productionDetected = $wpCliConfig['production'] ?? null;
 
-            $remoteDetails = $this->extractRemoteDetails($productionUploads);
+        if ($productionDetected && $this->option('auto')) {
+            $environments['production'] = $this->buildEnvironmentFromWpCli('production', $productionDetected);
+        } else {
+            $productionUrl = $this->ask('Site URL (leave empty to skip production)');
+            if ($productionUrl) {
+                $productionUploads = $this->ask(
+                    'Uploads path with SSH (e.g., web@example.com:/srv/www/example.com/shared/uploads/)'
+                );
 
-            $environments['production'] = [
-                'url' => $productionUrl,
-                'uploads_path' => $productionUploads,
-                'wp_cli_alias' => '@production',
-                'ssh_host' => $remoteDetails['ssh_host'],
-                'remote_path' => $remoteDetails['remote_path'],
-            ];
+                $sshPort = $this->ask('SSH port (leave empty for default 22)', '22');
+
+                $remoteDetails = $this->extractRemoteDetails($productionUploads, $sshPort);
+
+                $environments['production'] = [
+                    'url' => $productionUrl,
+                    'uploads_path' => $productionUploads,
+                    'wp_cli_alias' => '@production',
+                    'ssh_host' => $remoteDetails['ssh_host'],
+                    'ssh_port' => $remoteDetails['ssh_port'],
+                    'remote_path' => $remoteDetails['remote_path'],
+                ];
+            }
         }
 
         return $environments;
     }
 
     /**
+     * Build environment configuration from wp-cli.yml data.
+     */
+    protected function buildEnvironmentFromWpCli(string $name, array $wpCliData): array
+    {
+        $sshHost = $wpCliData['ssh'] ?? null;
+        $remotePath = $wpCliData['path'] ?? null;
+
+        // Extract SSH port from ssh string if present (e.g., "user@host:port" or "user@host")
+        $sshPort = '22';
+        if ($sshHost && str_contains($sshHost, ':')) {
+            [$sshHost, $sshPort] = explode(':', $sshHost, 2);
+        }
+
+        // Construct uploads path
+        $uploadsPath = $sshHost && $remotePath
+            ? $sshHost . ':' . rtrim($remotePath, '/') . '/web/app/uploads/'
+            : 'web/app/uploads/';
+
+        return [
+            'url' => $this->ask("URL for {$name}", "https://{$name}.example.com"),
+            'uploads_path' => $uploadsPath,
+            'wp_cli_alias' => "@{$name}",
+            'ssh_host' => $sshHost,
+            'ssh_port' => $sshPort,
+            'remote_path' => $remotePath,
+        ];
+    }
+
+    /**
      * Extract SSH host and remote path from uploads path.
      */
-    protected function extractRemoteDetails(string $uploadsPath): array
+    protected function extractRemoteDetails(string $uploadsPath, string $sshPort = '22'): array
     {
         if (preg_match('/^(.+):(.+)$/', $uploadsPath, $matches)) {
             $host = $matches[1];
@@ -146,12 +240,14 @@ class SyncInitCommand extends Command
 
             return [
                 'ssh_host' => $host,
+                'ssh_port' => $sshPort,
                 'remote_path' => $basePath,
             ];
         }
 
         return [
             'ssh_host' => null,
+            'ssh_port' => '22',
             'remote_path' => null,
         ];
     }
@@ -159,9 +255,18 @@ class SyncInitCommand extends Command
     /**
      * Update the configuration file.
      */
-    protected function updateConfigFile(array $environments): void
+    protected function updateConfigFile(array $environments): bool
     {
         $configPath = config_path('sync.php');
+        $configDir = dirname($configPath);
+
+        // Ensure config directory exists
+        if (!File::isDirectory($configDir)) {
+            if (!File::makeDirectory($configDir, 0755, true)) {
+                $this->error("Failed to create config directory: {$configDir}");
+                return false;
+            }
+        }
 
         // Read existing config or use default
         $config = File::exists($configPath) ? include $configPath : [];
@@ -195,9 +300,15 @@ class SyncInitCommand extends Command
 
         // Write config file
         $configContent = "<?php\n\nreturn " . var_export($config, true) . ";\n";
-        File::put($configPath, $configContent);
 
-        $this->info('✅ Configuration file updated');
+        try {
+            File::put($configPath, $configContent);
+            $this->info('✅ Configuration file created at: ' . str_replace(base_path(), '', $configPath));
+            return true;
+        } catch (Exception $e) {
+            $this->error('Failed to write configuration file: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**

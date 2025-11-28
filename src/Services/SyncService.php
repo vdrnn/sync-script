@@ -37,6 +37,8 @@ class SyncService
             $process = Process::fromShellCommandline("wp option get home");
         }
 
+        // Set working directory to base path for local WP-CLI commands
+        $process->setWorkingDirectory(base_path());
         $process->run();
 
         return $process->isSuccessful() && !str_contains($process->getOutput(), 'Error');
@@ -55,8 +57,11 @@ class SyncService
         $fromCmd = $this->getWpCliCommand($from, $useLocal);
         $toCmd = $this->getWpCliCommand($to, $useLocal);
 
+        $workingDir = base_path();
+
         // Export backup of target database
         $backupProcess = Process::fromShellCommandline("{$toCmd} db export --default-character-set={$charset}");
+        $backupProcess->setWorkingDirectory($workingDir);
         $backupProcess->run();
         if (!$backupProcess->isSuccessful()) {
             throw new Exception("Failed to backup {$to} database: " . $backupProcess->getErrorOutput());
@@ -64,6 +69,7 @@ class SyncService
 
         // Reset target database
         $resetProcess = Process::fromShellCommandline("{$toCmd} db reset --yes");
+        $resetProcess->setWorkingDirectory($workingDir);
         $resetProcess->run();
         if (!$resetProcess->isSuccessful()) {
             throw new Exception("Failed to reset {$to} database: " . $resetProcess->getErrorOutput());
@@ -71,6 +77,7 @@ class SyncService
 
         // Import from source to target
         $importProcess = Process::fromShellCommandline("{$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import -");
+        $importProcess->setWorkingDirectory($workingDir);
         $importProcess->run();
         if (!$importProcess->isSuccessful()) {
             throw new Exception("Failed to import database: " . $importProcess->getErrorOutput());
@@ -78,6 +85,7 @@ class SyncService
 
         // Search and replace URLs
         $searchReplaceProcess = Process::fromShellCommandline("{$toCmd} search-replace \"{$fromConfig['url']}\" \"{$toConfig['url']}\" --all-tables-with-prefix");
+        $searchReplaceProcess->setWorkingDirectory($workingDir);
         $searchReplaceProcess->run();
         if (!$searchReplaceProcess->isSuccessful()) {
             throw new Exception("Failed to search-replace URLs: " . $searchReplaceProcess->getErrorOutput());
@@ -116,6 +124,7 @@ class SyncService
     {
         $permissions = Config::get('sync.options.upload_permissions', '755');
         $process = Process::fromShellCommandline("chmod -R {$permissions} {$path}");
+        $process->setWorkingDirectory(base_path());
         $process->run();
 
         return $process->isSuccessful();
@@ -130,9 +139,16 @@ class SyncService
         $toParts = $this->parseRemotePath($toConfig['uploads_path']);
         $sshOptions = Config::get('sync.options.ssh_options', '-o StrictHostKeyChecking=no');
 
-        $command = "ssh -o ForwardAgent=yes {$fromParts['host']} \"rsync -aze 'ssh {$sshOptions}' --progress {$fromParts['path']} {$toParts['host']}:{$toParts['path']}\"";
+        // Add SSH port support
+        $fromPort = $fromConfig['ssh_port'] ?? '22';
+        $toPort = $toConfig['ssh_port'] ?? '22';
+        $fromSshPort = $fromPort !== '22' ? "-p {$fromPort}" : '';
+        $toSshPort = $toPort !== '22' ? "-p {$toPort}" : '';
+
+        $command = "ssh {$fromSshPort} -o ForwardAgent=yes {$fromParts['host']} \"rsync -aze 'ssh {$sshOptions} {$toSshPort}' --progress {$fromParts['path']} {$toParts['host']}:{$toParts['path']}\"";
 
         $process = Process::fromShellCommandline($command);
+        $process->setWorkingDirectory(base_path());
         $process->run();
 
         return $process->isSuccessful();
@@ -146,7 +162,20 @@ class SyncService
         $fromPath = $fromConfig['uploads_path'];
         $toPath = $toConfig['uploads_path'];
 
+        // Add SSH port support for rsync
+        $sshPort = null;
+        if (isset($fromConfig['ssh_port']) && $fromConfig['ssh_port'] !== '22') {
+            $sshPort = $fromConfig['ssh_port'];
+        } elseif (isset($toConfig['ssh_port']) && $toConfig['ssh_port'] !== '22') {
+            $sshPort = $toConfig['ssh_port'];
+        }
+
+        if ($sshPort) {
+            $rsyncOptions .= " -e 'ssh -p {$sshPort}'";
+        }
+
         $process = Process::fromShellCommandline("rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"");
+        $process->setWorkingDirectory(base_path());
         $process->run();
 
         return $process->isSuccessful();
@@ -250,6 +279,7 @@ class SyncService
     public function getCurrentUser(): string
     {
         $process = Process::fromShellCommandline('git config user.name');
+        $process->setWorkingDirectory(base_path());
         $process->run();
 
         return $process->isSuccessful() ? trim($process->getOutput()) : 'Unknown';

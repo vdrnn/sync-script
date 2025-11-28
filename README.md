@@ -2,6 +2,8 @@
 
 A powerful WordPress environment synchronization package for Acorn (Laravel + WordPress). Easily sync databases and assets between development, staging, and production environments with a simple command-line interface.
 
+> **Note**: The bash scripts `sync.sh` and `sync-kinsta.sh` are deprecated and maintained only for legacy/reference purposes. Please use the Acorn commands instead.
+
 ## Features
 
 - 🔄 **Database Synchronization** - Export, import, and search-replace URLs automatically
@@ -9,10 +11,13 @@ A powerful WordPress environment synchronization package for Acorn (Laravel + Wo
 - 🌐 **Multi-Environment Support** - Development, staging, and production environments
 - ⚙️ **WP-CLI Integration** - Automatic alias management and remote command execution
 - 🔧 **Interactive Setup** - Easy configuration with `sync:init` command
+- 🤖 **Auto-Detection** - Automatically detects existing wp-cli.yml configuration
+- 🔌 **SSH Port Support** - Full support for custom SSH ports (Kinsta, etc.)
 - 📊 **Status Monitoring** - Check environment connectivity with `sync:status`
 - 🎛️ **Configuration Management** - Edit settings with `sync:config`
 - 🔔 **Slack Notifications** - Optional notifications for sync operations
 - 🛡️ **Safety Features** - Confirmation prompts and backup creation
+- 🌊 **Laravel Valet Compatible** - Works seamlessly with Valet, DDEV, and other local environments
 
 ## Installation
 
@@ -52,11 +57,12 @@ wp acorn optimize:clear
 Initialize Acorn Sync configuration with interactive prompts.
 
 ```bash
-wp acorn sync:init [--force]
+wp acorn sync:init [--force] [--auto]
 ```
 
 **Options:**
 - `--force` - Overwrite existing configuration
+- `--auto` - Auto-detect configuration from existing wp-cli.yml
 
 ### `sync:env`
 Sync data between WordPress environments.
@@ -249,17 +255,27 @@ The following sync directions are supported:
 
 ### Common Issues
 
-1. **WP-CLI connection errors**
+1. **"Empty string returned" or connectivity issues with development environment**
+   - **Fixed in latest version!** This was caused by WP-CLI commands not running in the correct directory
+   - If you're experiencing this, update to the latest version
+   - Works with Laravel Valet, DDEV, and other local development environments
+
+2. **WP-CLI connection errors**
    - Verify SSH keys are properly configured
    - Check WP-CLI aliases in `wp-cli.yml`
-   - Test manual WP-CLI commands
+   - Test manual WP-CLI commands: `wp @staging option get home`
 
-2. **rsync permission errors**
+3. **rsync permission errors**
    - Ensure proper SSH access to remote servers
    - Check file permissions on uploads directories
    - Verify rsync is installed on all servers
 
-3. **Database sync failures**
+4. **Custom SSH ports (Kinsta, managed hosting)**
+   - The package now supports custom SSH ports natively
+   - During `sync:init`, you'll be prompted for the SSH port
+   - Default is 22, but you can specify any port (e.g., 12345 for Kinsta)
+
+5. **Database sync failures**
    - Check database credentials and connectivity
    - Ensure sufficient disk space for database exports
    - Verify character set compatibility
@@ -271,6 +287,16 @@ Enable verbose output by adding the `-v` flag to any command:
 ```bash
 wp acorn sync:env production development -v
 ```
+
+### Compatibility
+
+- ✅ **Bedrock** - Full support
+- ✅ **Radicle** - Full support (Roots' development environment)
+- ✅ **Laravel Valet** - Full support
+- ✅ **DDEV** - Full support
+- ✅ **Kinsta** - Full support (custom SSH ports)
+- ✅ **WP Engine** - Full support
+- ✅ **Standard hosting** - Full support
 
 ## Contributing
 

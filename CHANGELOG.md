@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.1.0] - 2025-11-28
+
+### Fixed
+- **Critical**: Fixed working directory bug causing "empty string returned" error for local development environments
+- All WP-CLI commands now correctly execute from the project root directory
+- Laravel Valet, DDEV, and other local environments now work correctly
+
+### Added
+- **Auto-detection** - Automatically detects and imports existing `wp-cli.yml` configuration
+- **SSH Port Support** - Full support for custom SSH ports (Kinsta, managed hosting, etc.)
+- `--auto` flag for `sync:init` command to automatically configure from wp-cli.yml
+- SSH port configuration in environment settings
+- Radicle compatibility verified and documented
+- Comprehensive troubleshooting section in README
+- Better error messages and configuration validation
+
+### Changed
+- Enhanced `sync:init` command with better prompts and defaults
+- Improved configuration file creation with directory auto-creation
+- Updated config structure to include `ssh_port` field
+- All Process commands now use proper working directory
+- Better detection of development environment URL from `.env`
+- Marked legacy bash scripts as deprecated with migration guidance
+
+### Improved
+- Documentation updated with compatibility matrix
+- Added examples for custom SSH ports
+- Better explanation of configuration options
+- More helpful error messages
+
 ## [2.0.0] - 2025-05-28
 
 ### Added

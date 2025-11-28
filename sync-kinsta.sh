@@ -3,6 +3,11 @@
 # Syncing Trellis & Bedrock-based WordPress environments with WP-CLI aliases (Kinsta version)
 # Version 1.2.0
 # Copyright (c) Ben Word
+#
+# ⚠️  DEPRECATED: This bash script is maintained for legacy/reference purposes only.
+# Please use the Acorn Sync package instead: https://github.com/vdrnn/sync-script
+# Install with: composer require vdrnn/acorn-sync
+# The Acorn version now supports custom SSH ports natively.
 
 DEVDIR="web/app/uploads/"
 DEVSITE="https://example.test"

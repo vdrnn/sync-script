@@ -21,6 +21,7 @@ return [
             'uploads_path' => env('SYNC_STAGING_UPLOADS_PATH'),
             'wp_cli_alias' => '@staging',
             'ssh_host' => null, // Will be extracted from uploads_path
+            'ssh_port' => env('SYNC_STAGING_SSH_PORT', '22'),
             'remote_path' => null, // Will be extracted from uploads_path
         ],
         'production' => [
@@ -28,6 +29,7 @@ return [
             'uploads_path' => env('SYNC_PROD_UPLOADS_PATH'),
             'wp_cli_alias' => '@production',
             'ssh_host' => null, // Will be extracted from uploads_path
+            'ssh_port' => env('SYNC_PROD_SSH_PORT', '22'),
             'remote_path' => null, // Will be extracted from uploads_path
         ],
     ],
