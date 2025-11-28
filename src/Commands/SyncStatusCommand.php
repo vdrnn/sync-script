@@ -12,7 +12,8 @@ class SyncStatusCommand extends Command
      * The name and signature of the console command.
      */
     protected $signature = 'sync:status
-                           {environment? : Check specific environment (optional)}';
+                           {environment? : Check specific environment (optional)}
+                           {--debug : Show detailed debugging information}';
 
     /**
      * The console command description.
@@ -118,15 +119,35 @@ class SyncStatusCommand extends Command
         $this->line('  Connectivity: ', false);
 
         try {
-            if ($syncService->validateEnvironment($environment)) {
+            $result = $syncService->validateEnvironment($environment);
+
+            if ($this->option('debug')) {
+                $this->newLine();
+                $this->line('  Debug Info:', false);
+                $result ? $this->line(' validation returned true') : $this->line(' validation returned false');
+            }
+
+            if ($result) {
                 $this->line('<info>✅ Connected</info>');
                 return true;
             } else {
                 $this->line('<error>❌ Failed</error>');
+
+                if ($this->option('debug')) {
+                    $config = Config::get("sync.environments.{$environment}");
+                    $alias = $config['wp_cli_alias'] ?? 'local';
+                    $this->line("  Try running manually: <comment>wp " . ($alias !== 'local' ? $alias : '') . " option get home</comment>");
+                }
+
                 return false;
             }
         } catch (\Exception $e) {
             $this->line('<error>❌ Error: ' . $e->getMessage() . '</error>');
+
+            if ($this->option('debug')) {
+                $this->line('  Stack trace: ' . $e->getTraceAsString());
+            }
+
             return false;
         }
     }

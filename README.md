@@ -1,23 +1,22 @@
 # Acorn Sync
 
-A powerful WordPress environment synchronization package for Acorn (Laravel + WordPress). Easily sync databases and assets between development, staging, and production environments with a simple command-line interface.
+WordPress environment synchronization for Bedrock and Radicle projects. Sync databases and uploads between development, staging, and production environments via WP-CLI.
 
-> **Note**: The bash scripts `sync.sh` and `sync-kinsta.sh` are deprecated and maintained only for legacy/reference purposes. Please use the Acorn commands instead.
+> **Note**: This package is heavily inspired by and based on the original [roots/sync-script](https://github.com/roots/sync-script/) bash script, reimplemented as an Acorn package with Laravel-style configuration and improved cross-platform support.
 
 ## Features
 
-- 🔄 **Database Synchronization** - Export, import, and search-replace URLs automatically
-- 📁 **Asset Synchronization** - Sync uploads directories via rsync with progress indicators
-- 🌐 **Multi-Environment Support** - Development, staging, and production environments
-- ⚙️ **WP-CLI Integration** - Automatic alias management and remote command execution
-- 🔧 **Interactive Setup** - Easy configuration with `sync:init` command
-- 🤖 **Auto-Detection** - Automatically detects existing wp-cli.yml configuration
-- 🔌 **SSH Port Support** - Full support for custom SSH ports (Kinsta, etc.)
-- 📊 **Status Monitoring** - Check environment connectivity with `sync:status`
-- 🎛️ **Configuration Management** - Edit settings with `sync:config`
-- 🔔 **Slack Notifications** - Optional notifications for sync operations
-- 🛡️ **Safety Features** - Confirmation prompts and backup creation
-- 🌊 **Laravel Valet Compatible** - Works seamlessly with Valet, DDEV, and other local environments
+- 🔄 **Database sync** - Export, import, and search-replace URLs between environments
+- 📁 **Uploads sync** - Transfer media files via rsync with progress indicators
+- 🌐 **Multi-environment** - Manage development, staging, and production setups
+- ⚙️ **WP-CLI integration** - Auto-manages aliases and remote command execution
+- 🤖 **Auto-detection** - Reads existing wp-cli.yml configuration
+- 🔌 **SSH port support** - Works with custom ports (Kinsta, managed hosting)
+- 📊 **Status monitoring** - Check environment connectivity before syncing
+- 🎛️ **Configuration CLI** - View and edit settings via command line
+- 🔔 **Slack notifications** - Optional sync completion alerts
+- 🛡️ **Safety first** - Confirmation prompts and automatic backups
+- 🌊 **Local dev friendly** - Compatible with Valet, DDEV, and similar tools
 
 ## Installation
 
@@ -37,19 +36,83 @@ wp acorn optimize:clear
 
 1. **Initialize the package:**
    ```bash
-   wp acorn sync:init
+   wp acorn sync:init --auto
    ```
-   This will guide you through setting up your environments interactively.
+   This will automatically detect your wp-cli.yml and set up environments.
 
-2. **Check environment connectivity:**
+2. **Review and adjust paths (if needed):**
+   Edit `.env` to fix uploads paths for your specific deployment (see [Setup Workflow](#setup-workflow)).
+
+3. **Check environment connectivity:**
    ```bash
    wp acorn sync:status
    ```
 
-3. **Sync from production to development:**
+4. **Sync from production to development:**
    ```bash
    wp acorn sync:env production development
    ```
+
+## Setup Workflow
+
+### Recommended Process
+
+1. **Ensure `wp-cli.yml` is configured** (for WP-CLI remote access):
+   ```yaml
+   @production:
+     ssh: 'user@host:/path/to/project'
+     path: web/wp
+   ```
+
+2. **Run auto-detection**:
+   ```bash
+   wp acorn sync:init --force --auto
+   ```
+   This will:
+   - ✅ Read your `wp-cli.yml` and detect all environments
+   - ✅ Generate `config/sync.php` with `env()` helpers
+   - ✅ Populate `.env` with auto-detected paths
+   - ✅ Update `wp-cli.yml` with aliases (if needed)
+
+3. **Review generated `.env` file**:
+   ```bash
+   # Check the generated paths
+   grep "SYNC_" .env
+   ```
+
+4. **Adjust uploads paths for your deployment**:
+
+   **Standard structure** (auto-detected):
+   ```env
+   SYNC_PRODUCTION_UPLOADS_PATH="user@host:/path/to/project/web/app/uploads/"
+   ```
+
+   **Ploi/Trellis deployments** (need manual update):
+   ```env
+   # Update to shared directory
+   SYNC_PRODUCTION_UPLOADS_PATH="user@host:/path/to/project-shared/uploads/"
+   ```
+
+5. **Verify connectivity**:
+   ```bash
+   wp acorn sync:status
+   ```
+
+### Key Points
+
+- **wp-cli.yml** = WP-CLI configuration (SSH access to WordPress)
+- **.env** = Sync package configuration (uploads paths, URLs, etc.)
+- **Auto-detection gives a good starting point** - fine-tune in `.env` for your deployment
+- **No need to manually edit wp-cli.yml** - `sync:init` handles it
+- **Different deployments use different paths**:
+  - Standard: `/project/web/app/uploads/`
+  - Ploi: `/project-shared/uploads/`
+  - Trellis: `/project/shared/uploads/`
+  - Custom hosting: Adjust based on your structure
+
+### Why Edit .env?
+
+Auto-detection assumes standard Bedrock structure, but many hosting providers (Ploi, Trellis) use shared directories for uploads that persist across deployments. The `.env` file lets you override these paths without modifying committed config files.
 
 ## Commands
 
@@ -151,23 +214,25 @@ The package uses a configuration file at `config/sync.php`. Here's an example:
 return [
     'environments' => [
         'development' => [
-            'url' => 'https://example.test',
-            'uploads_path' => 'web/app/uploads/',
+            'url' => env('SYNC_DEVELOPMENT_URL', 'https://example.test'),
+            'uploads_path' => env('SYNC_DEVELOPMENT_UPLOADS_PATH', 'web/app/uploads/'),
             'wp_cli_alias' => null, // Local environment
         ],
         'staging' => [
-            'url' => 'https://staging.example.com',
-            'uploads_path' => 'web@staging.example.com:/srv/www/example.com/shared/uploads/',
+            'url' => env('SYNC_STAGING_URL', 'https://staging.example.com'),
+            'uploads_path' => env('SYNC_STAGING_UPLOADS_PATH', 'web@staging.example.com:/srv/www/example.com/shared/uploads/'),
             'wp_cli_alias' => '@staging',
-            'ssh_host' => 'web@staging.example.com',
-            'remote_path' => '/srv/www/example.com/current',
+            'ssh_host' => env('SYNC_STAGING_SSH_HOST', 'web@staging.example.com'),
+            'ssh_port' => env('SYNC_STAGING_SSH_PORT', '22'),
+            'remote_path' => env('SYNC_STAGING_REMOTE_PATH', '/srv/www/example.com/current'),
         ],
         'production' => [
-            'url' => 'https://example.com',
-            'uploads_path' => 'web@example.com:/srv/www/example.com/shared/uploads/',
+            'url' => env('SYNC_PRODUCTION_URL', 'https://example.com'),
+            'uploads_path' => env('SYNC_PRODUCTION_UPLOADS_PATH', 'web@example.com:/srv/www/example.com/shared/uploads/'),
             'wp_cli_alias' => '@production',
-            'ssh_host' => 'web@example.com',
-            'remote_path' => '/srv/www/example.com/current',
+            'ssh_host' => env('SYNC_PRODUCTION_SSH_HOST', 'web@example.com'),
+            'ssh_port' => env('SYNC_PRODUCTION_SSH_PORT', '22'),
+            'remote_path' => env('SYNC_PRODUCTION_REMOTE_PATH', '/srv/www/example.com/current'),
         ],
     ],
 
@@ -179,7 +244,7 @@ return [
         'database_charset' => 'utf8mb4',
         'rsync_options' => '-az --progress',
         'ssh_options' => '-o StrictHostKeyChecking=no',
-        'enable_slack_notifications' => false,
+        'enable_slack_notifications' => env('SYNC_SLACK_NOTIFICATIONS', false),
         'slack_webhook_url' => env('SYNC_SLACK_WEBHOOK'),
         'slack_channel' => env('SYNC_SLACK_CHANNEL', '#general'),
     ],
@@ -191,6 +256,20 @@ return [
     ],
 ];
 ```
+
+### Configuration Flexibility
+
+The package supports two complementary approaches for configuration:
+
+1. **Environment Variables (.env)** - Values in `.env` override config defaults
+2. **Config File (config/sync.php)** - Provides fallback defaults using `env()` helpers
+
+This gives you flexibility to:
+- Store sensitive data (SSH hosts, ports, paths) in `.env` (gitignored)
+- Keep sensible defaults in `config/sync.php` (committed to repo)
+- Share configuration across teams while allowing local overrides
+
+The `sync:init` command automatically populates both files for you.
 
 ## Environment Variables
 
@@ -204,15 +283,24 @@ SYNC_DEVELOPMENT_UPLOADS_PATH="web/app/uploads/"
 # Staging
 SYNC_STAGING_URL="https://staging.example.com"
 SYNC_STAGING_UPLOADS_PATH="web@staging.example.com:/srv/www/example.com/shared/uploads/"
+SYNC_STAGING_SSH_HOST="web@staging.example.com"
+SYNC_STAGING_SSH_PORT="22"
+SYNC_STAGING_REMOTE_PATH="/srv/www/example.com/current"
 
 # Production
 SYNC_PRODUCTION_URL="https://example.com"
 SYNC_PRODUCTION_UPLOADS_PATH="web@example.com:/srv/www/example.com/shared/uploads/"
+SYNC_PRODUCTION_SSH_HOST="web@example.com"
+SYNC_PRODUCTION_SSH_PORT="22"
+SYNC_PRODUCTION_REMOTE_PATH="/srv/www/example.com/current"
 
 # Optional: Slack notifications
+SYNC_SLACK_NOTIFICATIONS=false
 SYNC_SLACK_WEBHOOK="https://hooks.slack.com/services/..."
 SYNC_SLACK_CHANNEL="#general"
 ```
+
+> **Note**: The `sync:init` command automatically populates these variables for you based on your input or detected wp-cli.yml configuration.
 
 ## WP-CLI Configuration
 
@@ -220,13 +308,15 @@ The package can automatically update your `wp-cli.yml` file with remote aliases:
 
 ```yaml
 @staging:
-  ssh: web@staging.example.com
-  path: /srv/www/example.com/current
+  ssh: web@staging.example.com:/srv/www/example.com/current
+  path: web/wp
 
 @production:
-  ssh: web@example.com
-  path: /srv/www/example.com/current
+  ssh: web@example.com:/srv/www/example.com/current
+  path: web/wp
 ```
+
+> **Note**: The package automatically handles various wp-cli.yml formats, including unquoted @ symbols (common in Roots examples) and both absolute and rsync-style SSH paths. Your existing wp-cli.yml will work as-is and the package will detect all configured environments.
 
 ## Sync Directions
 
@@ -282,21 +372,47 @@ The following sync directions are supported:
 
 ### Debug Mode
 
-Enable verbose output by adding the `-v` flag to any command:
+For detailed debugging information during status checks:
 
 ```bash
+# Use the --debug flag for detailed connectivity diagnostics
+wp acorn sync:status --debug
+
+# Use -v flag for verbose sync output
 wp acorn sync:env production development -v
 ```
 
+The `--debug` flag shows:
+- Detailed error messages
+- WP-CLI command outputs
+- Manual commands to try for troubleshooting
+- Stack traces for exceptions
+
 ### Compatibility
 
-- ✅ **Bedrock** - Full support
-- ✅ **Radicle** - Full support (Roots' development environment)
-- ✅ **Laravel Valet** - Full support
-- ✅ **DDEV** - Full support
-- ✅ **Kinsta** - Full support (custom SSH ports)
-- ✅ **WP Engine** - Full support
-- ✅ **Standard hosting** - Full support
+**Tested & Confirmed:**
+- ✅ **Bedrock** - Fully tested
+- ✅ **Radicle** - Fully tested
+- ✅ **Laravel Valet** - Fully tested
+- ✅ **Ploi** - Fully tested (shared uploads deployments)
+
+**Should Work (untested):**
+- ⚠️ **DDEV** - Standard structure, should work
+- ⚠️ **Trellis** - Similar to Ploi (shared uploads pattern)
+- ⚠️ **Kinsta** - Has SSH port support, needs validation
+- ⚠️ **WP Engine** - Standard structure, should work
+- ⚠️ **Flywheel** - Standard structure, should work
+
+## Roadmap
+
+Planned features for future releases:
+
+- Kinsta hosting validation & testing
+- Multisite support
+- Selective table sync
+- Dry-run mode
+- Sync progress notifications
+- Pre/post sync hooks
 
 ## Contributing
 

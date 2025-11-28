@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.2.0] - 2025-11-28
+
+### Fixed
+- **Critical**: Fixed Radicle path duplication bug - remote paths now correctly point to project root instead of WP core directory
+- **Critical**: Improved wp-cli.yml parsing to handle unquoted @ symbols (common in Roots documentation)
+- Fixed rsync-style path parsing (user@host:/path) vs port notation (user@host:22)
+- Enhanced project root detection with dynamic upward search algorithm
+- wp-cli.yml generation now writes correct format that WP-CLI can parse
+- Removed redundant shell commands for better performance and reliability
+
+### Added
+- **Laravel-style configuration** - Config now uses `env()` helpers with fallback defaults
+- WordPress native function integration - Uses `wp_upload_dir()` for better compatibility
+- SSH connection details (host, port, remote_path) now written to `.env` file
+- `--debug` flag for `sync:status` command with detailed error reporting
+- Better auto-detection from existing wp-cli.yml (now detects all environments, not just @development)
+- Configuration flexibility documentation explaining .env vs config/sync.php usage
+
+### Changed
+- Config structure now reads from `.env` with `env()` helpers (auto-migrated by sync:init)
+- Improved project root detection with smarter fallback logic
+- Enhanced environment detection during `sync:init` command
+- Better error messages showing exact WP-CLI commands for manual testing
+- Updated documentation with complete environment variable list
+
+### Improved
+- Configuration flexibility - Users can choose between .env or config/sync.php
+- Cross-platform uploads path detection respects WordPress filters
+- More robust YAML parsing handles edge cases
+- Better separation of concerns in configuration generation
+- Enhanced debugging capabilities with --debug flag
+- Code quality and maintainability - Refactored internal structure detection for better consistency
+
 ## [2.1.0] - 2025-11-28
 
 ### Fixed

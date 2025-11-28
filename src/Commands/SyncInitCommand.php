@@ -41,10 +41,10 @@ class SyncInitCommand extends Command
         }
 
         // Try to auto-detect from wp-cli.yml
-        $wpCliConfig = $this->detectWpCliConfig();
+        $wpCliConfig = $this->detectWpCliConfig($syncService);
 
         // Collect environment data
-        $environments = $this->collectEnvironmentData($wpCliConfig);
+        $environments = $this->collectEnvironmentData($syncService, $wpCliConfig);
 
         // Update configuration file
         if (!$this->updateConfigFile($environments)) {
@@ -59,7 +59,7 @@ class SyncInitCommand extends Command
 
         // Update .env file
         if ($this->confirm('Update .env file with environment variables?', true)) {
-            $this->updateEnvFile($environments);
+            $this->updateEnvFile($environments, $syncService);
         }
 
         $this->newLine();
@@ -77,15 +77,23 @@ class SyncInitCommand extends Command
     /**
      * Detect existing wp-cli.yml configuration.
      */
-    protected function detectWpCliConfig(): ?array
+    protected function detectWpCliConfig(SyncService $syncService): ?array
     {
-        $wpCliPath = base_path('wp-cli.yml');
+        $wpCliPath = $syncService->getProjectRoot() . '/wp-cli.yml';
         if (!File::exists($wpCliPath)) {
             return null;
         }
 
         try {
-            $config = Yaml::parseFile($wpCliPath);
+            // Read the file content
+            $content = file_get_contents($wpCliPath);
+
+            // Fix unquoted @ symbols at the start of lines (common in wp-cli.yml)
+            // Pattern: @something: becomes "@something":
+            $content = preg_replace('/^(@[a-zA-Z0-9_-]+):/m', '"$1":', $content);
+
+            // Parse the fixed YAML
+            $config = Yaml::parse($content);
 
             if (empty($config)) {
                 return null;
@@ -113,9 +121,34 @@ class SyncInitCommand extends Command
     }
 
     /**
+     * Detect the default uploads path using WordPress's wp_upload_dir().
+     * Returns a relative path from the project root.
+     */
+    protected function getDefaultUploadsPath(SyncService $syncService): string
+    {
+        try {
+            // Use WordPress's built-in function to get the uploads directory
+            $uploadDir = wp_upload_dir();
+            $absoluteUploadPath = $uploadDir['basedir'];
+
+            // Get project root
+            $projectRoot = $syncService->getProjectRoot();
+
+            // Convert to relative path
+            $relativePath = str_replace($projectRoot . '/', '', $absoluteUploadPath . '/');
+
+            return $relativePath;
+        } catch (\Exception $e) {
+            // Fallback: use structure detection
+            $structure = $syncService->detectProjectStructure();
+            return $syncService->getUploadsPathForStructure($structure);
+        }
+    }
+
+    /**
      * Collect environment data from user input.
      */
-    protected function collectEnvironmentData(?array $wpCliConfig = null): array
+    protected function collectEnvironmentData(SyncService $syncService, ?array $wpCliConfig = null): array
     {
         $this->info('📝 Environment Configuration');
         $this->line('Please provide the following information for each environment:');
@@ -129,7 +162,7 @@ class SyncInitCommand extends Command
         $devUrl = env('WP_HOME', 'https://example.test');
         $environments['development'] = [
             'url' => $this->ask('Site URL', $devUrl),
-            'uploads_path' => $this->ask('Uploads directory path', 'web/app/uploads/'),
+            'uploads_path' => $this->ask('Uploads directory path', $this->getDefaultUploadsPath($syncService)),
             'wp_cli_alias' => null,
         ];
         $this->newLine();
@@ -139,7 +172,7 @@ class SyncInitCommand extends Command
         $stagingDetected = $wpCliConfig['staging'] ?? null;
 
         if ($stagingDetected && $this->option('auto')) {
-            $environments['staging'] = $this->buildEnvironmentFromWpCli('staging', $stagingDetected);
+            $environments['staging'] = $this->buildEnvironmentFromWpCli('staging', $stagingDetected, $syncService);
         } else {
             $stagingUrl = $this->ask('Site URL (leave empty to skip staging)');
             if ($stagingUrl) {
@@ -168,7 +201,7 @@ class SyncInitCommand extends Command
         $productionDetected = $wpCliConfig['production'] ?? null;
 
         if ($productionDetected && $this->option('auto')) {
-            $environments['production'] = $this->buildEnvironmentFromWpCli('production', $productionDetected);
+            $environments['production'] = $this->buildEnvironmentFromWpCli('production', $productionDetected, $syncService);
         } else {
             $productionUrl = $this->ask('Site URL (leave empty to skip production)');
             if ($productionUrl) {
@@ -197,21 +230,49 @@ class SyncInitCommand extends Command
     /**
      * Build environment configuration from wp-cli.yml data.
      */
-    protected function buildEnvironmentFromWpCli(string $name, array $wpCliData): array
+    protected function buildEnvironmentFromWpCli(string $name, array $wpCliData, SyncService $syncService): array
     {
         $sshHost = $wpCliData['ssh'] ?? null;
         $remotePath = $wpCliData['path'] ?? null;
-
-        // Extract SSH port from ssh string if present (e.g., "user@host:port" or "user@host")
         $sshPort = '22';
-        if ($sshHost && str_contains($sshHost, ':')) {
+
+        // Detect project structure from path hints
+        $structure = $syncService->detectProjectStructure($remotePath);
+        $wpCorePath = $syncService->getWpCorePathForStructure($structure);
+
+        // Parse rsync-style format: user@host:/remote/path
+        if ($sshHost && preg_match('/^([^:]+):(\/.*?)$/', $sshHost, $matches)) {
+            // Format is "user@host:/path"
+            $sshHost = $matches[1];
+            $extractedRemotePath = $matches[2];
+
+            // If we have a WP core path from 'path:' line, strip it from SSH path to get project root
+            // Example: /home/user/project/public/wp -> /home/user/project
+            if ($remotePath === $wpCorePath) {
+                $suffix = '/' . $wpCorePath;
+                if (str_ends_with($extractedRemotePath, $suffix)) {
+                    $remotePath = substr($extractedRemotePath, 0, -strlen($suffix));
+                } else {
+                    // Fallback: use extracted path as-is (might already be project root)
+                    $remotePath = $extractedRemotePath;
+                }
+            } elseif (!$remotePath) {
+                // No separate path line, use extracted
+                $remotePath = $extractedRemotePath;
+            }
+        }
+
+        // Check for SSH port only if no rsync-style path was found
+        // Format would be "user@host:2222" (port) vs "user@host:/path" (rsync)
+        if ($sshHost && str_contains($sshHost, ':') && !str_contains($sshHost, ':/')) {
             [$sshHost, $sshPort] = explode(':', $sshHost, 2);
         }
 
-        // Construct uploads path
+        // Construct uploads path using structure-aware helper
+        $uploadsSubPath = $syncService->getUploadsPathForStructure($structure);
         $uploadsPath = $sshHost && $remotePath
-            ? $sshHost . ':' . rtrim($remotePath, '/') . '/web/app/uploads/'
-            : 'web/app/uploads/';
+            ? $sshHost . ':' . rtrim($remotePath, '/') . '/' . $uploadsSubPath
+            : $uploadsSubPath;
 
         return [
             'url' => $this->ask("URL for {$name}", "https://{$name}.example.com"),
@@ -268,38 +329,8 @@ class SyncInitCommand extends Command
             }
         }
 
-        // Read existing config or use default
-        $config = File::exists($configPath) ? include $configPath : [];
-
-        // Update environments
-        $config['environments'] = $environments;
-
-        // Ensure default options exist
-        if (!isset($config['options'])) {
-            $config['options'] = [
-                'backup_before_sync' => true,
-                'confirm_destructive_operations' => true,
-                'set_upload_permissions' => true,
-                'upload_permissions' => '755',
-                'database_charset' => 'utf8mb4',
-                'rsync_options' => '-az --progress',
-                'ssh_options' => '-o StrictHostKeyChecking=no',
-                'enable_slack_notifications' => false,
-                'slack_webhook_url' => env('SYNC_SLACK_WEBHOOK'),
-                'slack_channel' => env('SYNC_SLACK_CHANNEL', '#general'),
-            ];
-        }
-
-        if (!isset($config['wp_cli'])) {
-            $config['wp_cli'] = [
-                'config_file' => 'wp-cli.yml',
-                'auto_update_aliases' => true,
-                'backup_config_before_update' => true,
-            ];
-        }
-
-        // Write config file
-        $configContent = "<?php\n\nreturn " . var_export($config, true) . ";\n";
+        // Generate config content with env() helpers
+        $configContent = $this->generateConfigContent($environments);
 
         try {
             File::put($configPath, $configContent);
@@ -309,6 +340,95 @@ class SyncInitCommand extends Command
             $this->error('Failed to write configuration file: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Generate configuration file content with env() helpers.
+     */
+    protected function generateConfigContent(array $environments): string
+    {
+        $envs = [];
+        foreach ($environments as $name => $config) {
+            $envPrefix = 'SYNC_' . strtoupper($name);
+
+            $envs[] = "        '{$name}' => [";
+            $envs[] = "            'url' => env('{$envPrefix}_URL', '{$config['url']}'),";
+            $envs[] = "            'uploads_path' => env('{$envPrefix}_UPLOADS_PATH', '{$config['uploads_path']}'),";
+            $envs[] = "            'wp_cli_alias' => " . ($config['wp_cli_alias'] ? "'{$config['wp_cli_alias']}'" : 'null') . ",";
+
+            if (isset($config['ssh_host'])) {
+                $envs[] = "            'ssh_host' => env('{$envPrefix}_SSH_HOST', " . ($config['ssh_host'] ? "'{$config['ssh_host']}'" : 'null') . "),";
+            }
+            if (isset($config['ssh_port'])) {
+                $envs[] = "            'ssh_port' => env('{$envPrefix}_SSH_PORT', '{$config['ssh_port']}'),";
+            }
+            if (isset($config['remote_path'])) {
+                $envs[] = "            'remote_path' => env('{$envPrefix}_REMOTE_PATH', " . ($config['remote_path'] ? "'{$config['remote_path']}'" : 'null') . "),";
+            }
+
+            $envs[] = "        ],";
+        }
+
+        return <<<PHP
+<?php
+
+return [
+    /*
+    |--------------------------------------------------------------------------
+    | Sync Environments
+    |--------------------------------------------------------------------------
+    |
+    | Define your sync environments. Values can be configured via .env file
+    | using SYNC_{ENVIRONMENT}_{KEY} format (e.g., SYNC_PRODUCTION_URL).
+    |
+    */
+
+    'environments' => [
+{$this->indent(implode("\n", $envs), 2)}
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Sync Options
+    |--------------------------------------------------------------------------
+    */
+
+    'options' => [
+        'backup_before_sync' => true,
+        'confirm_destructive_operations' => true,
+        'set_upload_permissions' => true,
+        'upload_permissions' => '755',
+        'database_charset' => 'utf8mb4',
+        'rsync_options' => '-az --progress',
+        'ssh_options' => '-o StrictHostKeyChecking=no',
+        'enable_slack_notifications' => env('SYNC_SLACK_NOTIFICATIONS', false),
+        'slack_webhook_url' => env('SYNC_SLACK_WEBHOOK'),
+        'slack_channel' => env('SYNC_SLACK_CHANNEL', '#general'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | WP-CLI Configuration
+    |--------------------------------------------------------------------------
+    */
+
+    'wp_cli' => [
+        'config_file' => 'wp-cli.yml',
+        'auto_update_aliases' => true,
+        'backup_config_before_update' => true,
+    ],
+];
+
+PHP;
+    }
+
+    /**
+     * Helper to indent multi-line strings.
+     */
+    protected function indent(string $text, int $spaces): string
+    {
+        $indent = str_repeat(' ', $spaces);
+        return $indent . str_replace("\n", "\n{$indent}", $text);
     }
 
     /**
@@ -351,16 +471,28 @@ class SyncInitCommand extends Command
     /**
      * Update .env file with environment variables.
      */
-    protected function updateEnvFile(array $environments): void
+    protected function updateEnvFile(array $environments, SyncService $syncService): void
     {
-        $envPath = base_path('.env');
+        $envPath = $syncService->getProjectRoot() . '/.env';
         $envContent = File::exists($envPath) ? File::get($envPath) : '';
 
         $envVars = [];
         foreach ($environments as $name => $config) {
             $prefix = 'SYNC_' . strtoupper($name);
+
+            // Add all environment-specific variables
             $envVars["{$prefix}_URL"] = $config['url'];
             $envVars["{$prefix}_UPLOADS_PATH"] = $config['uploads_path'];
+
+            if (isset($config['ssh_host']) && $config['ssh_host']) {
+                $envVars["{$prefix}_SSH_HOST"] = $config['ssh_host'];
+            }
+            if (isset($config['ssh_port']) && $config['ssh_port']) {
+                $envVars["{$prefix}_SSH_PORT"] = $config['ssh_port'];
+            }
+            if (isset($config['remote_path']) && $config['remote_path']) {
+                $envVars["{$prefix}_REMOTE_PATH"] = $config['remote_path'];
+            }
         }
 
         // Add or update environment variables

@@ -10,6 +10,43 @@ use Exception;
 class SyncService
 {
     /**
+     * Get the project root directory.
+     * In Acorn-based projects (Bedrock, Radicle), base_path() returns the theme directory,
+     * but we need the project root where wp-cli.yml is located.
+     *
+     * This method searches upward from base_path() for marker files
+     * (wp-cli.yml and web/wp) to find the project root.
+     */
+    public function getProjectRoot(): string
+    {
+        $currentPath = base_path();
+        $maxLevels = 10; // Prevent infinite loops
+
+        for ($i = 0; $i < $maxLevels; $i++) {
+            // Check for Bedrock/Radicle/WordPress project markers
+            // Must have BOTH wp-cli.yml AND WordPress core directory
+            // Bedrock uses web/wp, Radicle uses public/wp
+            // (themes can have wp-cli.yml and composer.json but not the WP core dir)
+            if (file_exists($currentPath . '/wp-cli.yml') &&
+                (file_exists($currentPath . '/web/wp') || file_exists($currentPath . '/public/wp'))) {
+                return $currentPath;
+            }
+
+            $parentPath = dirname($currentPath);
+
+            // Stop if we've reached the root or can't go further up
+            if ($parentPath === $currentPath || $parentPath === '/') {
+                break;
+            }
+
+            $currentPath = $parentPath;
+        }
+
+        // Fallback: assume standard Bedrock structure (4 levels up)
+        return dirname(base_path(), 4);
+    }
+
+    /**
      * Get environment configuration.
      */
     public function getEnvironmentConfig(string $environment): array
@@ -30,18 +67,44 @@ class SyncService
     {
         $config = $this->getEnvironmentConfig($environment);
         $alias = $config['wp_cli_alias'];
+        $projectRoot = $this->getProjectRoot();
 
         if ($alias) {
-            $process = Process::fromShellCommandline("wp {$alias} option get home");
+            // For remote aliases, working directory is set below
+            $command = "wp {$alias} option get home 2>&1";
         } else {
-            $process = Process::fromShellCommandline("wp option get home");
+            $command = "wp option get home 2>&1";
         }
 
-        // Set working directory to base path for local WP-CLI commands
-        $process->setWorkingDirectory(base_path());
-        $process->run();
+        $process = Process::fromShellCommandline($command);
 
-        return $process->isSuccessful() && !str_contains($process->getOutput(), 'Error');
+        // Set working directory to project root so WP-CLI can find wp-cli.yml
+        $process->setWorkingDirectory($projectRoot);
+
+        // Set reasonable timeout for remote connections (2 minutes)
+        $process->setTimeout(120);
+
+        try {
+            $process->run();
+
+            $output = trim($process->getOutput());
+            $errorOutput = trim($process->getErrorOutput());
+            $exitCode = $process->getExitCode();
+
+            // Check if successful and output doesn't contain error messages
+            $isSuccessful = $exitCode === 0 &&
+                           !empty($output) &&
+                           !str_contains(strtolower($output), 'error') &&
+                           !str_contains(strtolower($errorOutput), 'error');
+
+            return $isSuccessful;
+        } catch (\Exception $e) {
+            // Process timeout or other exception
+            if (function_exists('error_log')) {
+                error_log("SyncService::validateEnvironment exception: " . $e->getMessage());
+            }
+            return false;
+        }
     }
 
     /**
@@ -57,7 +120,7 @@ class SyncService
         $fromCmd = $this->getWpCliCommand($from, $useLocal);
         $toCmd = $this->getWpCliCommand($to, $useLocal);
 
-        $workingDir = base_path();
+        $workingDir = $this->getProjectRoot();
 
         // Export backup of target database
         $backupProcess = Process::fromShellCommandline("{$toCmd} db export --default-character-set={$charset}");
@@ -124,7 +187,7 @@ class SyncService
     {
         $permissions = Config::get('sync.options.upload_permissions', '755');
         $process = Process::fromShellCommandline("chmod -R {$permissions} {$path}");
-        $process->setWorkingDirectory(base_path());
+        $process->setWorkingDirectory($this->getProjectRoot());
         $process->run();
 
         return $process->isSuccessful();
@@ -148,7 +211,7 @@ class SyncService
         $command = "ssh {$fromSshPort} -o ForwardAgent=yes {$fromParts['host']} \"rsync -aze 'ssh {$sshOptions} {$toSshPort}' --progress {$fromParts['path']} {$toParts['host']}:{$toParts['path']}\"";
 
         $process = Process::fromShellCommandline($command);
-        $process->setWorkingDirectory(base_path());
+        $process->setWorkingDirectory($this->getProjectRoot());
         $process->run();
 
         return $process->isSuccessful();
@@ -175,7 +238,7 @@ class SyncService
         }
 
         $process = Process::fromShellCommandline("rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"");
-        $process->setWorkingDirectory(base_path());
+        $process->setWorkingDirectory($this->getProjectRoot());
         $process->run();
 
         return $process->isSuccessful();
@@ -279,7 +342,7 @@ class SyncService
     public function getCurrentUser(): string
     {
         $process = Process::fromShellCommandline('git config user.name');
-        $process->setWorkingDirectory(base_path());
+        $process->setWorkingDirectory($this->getProjectRoot());
         $process->run();
 
         return $process->isSuccessful() ? trim($process->getOutput()) : 'Unknown';
@@ -290,8 +353,8 @@ class SyncService
      */
     public function updateWpCliConfig(array $environments): bool
     {
-        // Always use the Bedrock root wp-cli.yml, not theme folder
-        $wpCliPath = base_path('wp-cli.yml');
+        // Always use the project root wp-cli.yml, not theme folder
+        $wpCliPath = $this->getProjectRoot() . '/wp-cli.yml';
 
         // Backup existing config if enabled
         if (Config::get('sync.wp_cli.backup_config_before_update', true) && file_exists($wpCliPath)) {
@@ -299,21 +362,34 @@ class SyncService
         }
 
         // Read existing config
-        $config = file_exists($wpCliPath) ? Yaml::parseFile($wpCliPath) : [];
+        if (file_exists($wpCliPath)) {
+            $content = file_get_contents($wpCliPath);
+            // Fix unquoted @ symbols at the start of lines (common in wp-cli.yml)
+            $content = preg_replace('/^(@[a-zA-Z0-9_-]+):/m', '"$1":', $content);
+            $config = Yaml::parse($content);
+        } else {
+            $config = [];
+        }
+
+        // Detect project structure (Bedrock uses web/wp, Radicle uses public/wp)
+        $wpPath = $this->getWpCorePath();
 
         // Add development alias if not exists
         if (!isset($config['@development'])) {
             $config['@development'] = [
-                'path' => 'web/wp',
+                'path' => $wpPath,
             ];
         }
 
         // Add aliases for remote environments
         foreach ($environments as $name => $envConfig) {
             if ($envConfig['wp_cli_alias'] && isset($envConfig['ssh_host'], $envConfig['remote_path'])) {
+                // WP-CLI format: ssh line has base path, path is relative
+                $sshWithPath = $envConfig['ssh_host'] . ':' . $envConfig['remote_path'];
+
                 $config[$envConfig['wp_cli_alias']] = [
-                    'ssh' => $envConfig['ssh_host'],
-                    'path' => $envConfig['remote_path'] . '/web/wp',
+                    'ssh' => $sshWithPath,
+                    'path' => $wpPath,  // Use local structure detection for relative path
                 ];
             }
         }
@@ -325,6 +401,64 @@ class SyncService
         } catch (Exception $e) {
             return false;
         }
+    }
+
+    /**
+     * Detect project structure type (Bedrock or Radicle).
+     *
+     * @param string|null $pathHint Optional path hint for remote structure detection
+     * @return string 'bedrock' or 'radicle'
+     */
+    public function detectProjectStructure(?string $pathHint = null): string
+    {
+        // If path hint provided (e.g., from remote wp-cli.yml), use it
+        if ($pathHint) {
+            // Check for Radicle patterns
+            if (str_contains($pathHint, '/public/wp') || $pathHint === 'public/wp') {
+                return 'radicle';
+            }
+            // Check for Bedrock patterns
+            if (str_contains($pathHint, '/web/wp') || $pathHint === 'web/wp') {
+                return 'bedrock';
+            }
+        }
+
+        // Check local project structure
+        $projectRoot = $this->getProjectRoot();
+        if (file_exists($projectRoot . '/public/wp')) {
+            return 'radicle';
+        } elseif (file_exists($projectRoot . '/web/wp')) {
+            return 'bedrock';
+        }
+
+        // Default to Bedrock structure
+        return 'bedrock';
+    }
+
+    /**
+     * Get WordPress core path for a given structure.
+     */
+    public function getWpCorePathForStructure(string $structure): string
+    {
+        return $structure === 'radicle' ? 'public/wp' : 'web/wp';
+    }
+
+    /**
+     * Get uploads directory path for a given structure.
+     */
+    public function getUploadsPathForStructure(string $structure): string
+    {
+        return $structure === 'radicle' ? 'public/content/uploads/' : 'web/app/uploads/';
+    }
+
+    /**
+     * Get the WordPress core path relative to project root.
+     * Returns 'web/wp' for Bedrock or 'public/wp' for Radicle.
+     */
+    protected function getWpCorePath(): string
+    {
+        $structure = $this->detectProjectStructure();
+        return $this->getWpCorePathForStructure($structure);
     }
 
     /**
