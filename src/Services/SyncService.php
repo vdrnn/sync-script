@@ -213,7 +213,11 @@ class SyncService
         $process = Process::fromShellCommandline($command);
         $process->setWorkingDirectory($this->getProjectRoot());
         $process->setTimeout(null); // No timeout for large file transfers
-        $process->run();
+
+        // Run with output callback to prevent blocking on large transfers
+        $process->run(function ($type, $buffer) {
+            // Consume output to prevent pipe blocking
+        });
 
         return $process->isSuccessful();
     }
@@ -241,7 +245,11 @@ class SyncService
         $process = Process::fromShellCommandline("rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"");
         $process->setWorkingDirectory($this->getProjectRoot());
         $process->setTimeout(null); // No timeout for large file transfers
-        $process->run();
+
+        // Run with output callback to prevent blocking on large transfers
+        $process->run(function ($type, $buffer) {
+            // Consume output to prevent pipe blocking
+        });
 
         return $process->isSuccessful();
     }
