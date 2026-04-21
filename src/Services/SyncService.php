@@ -73,7 +73,7 @@ class SyncService
             // For remote aliases, working directory is set below
             $command = "wp {$alias} option get home 2>&1";
         } else {
-            $command = "wp option get home 2>&1";
+            $command = $this->buildLocalWpCommand() . " option get home 2>&1";
         }
 
         $process = Process::fromShellCommandline($command);
@@ -294,13 +294,29 @@ class SyncService
     protected function getWpCliCommand(string $environment, bool $useLocal = false): string
     {
         if ($useLocal && $environment === 'development') {
-            return 'wp';
+            return $this->buildLocalWpCommand();
         }
 
         $config = $this->getEnvironmentConfig($environment);
         $alias = $config['wp_cli_alias'];
 
-        return $alias ? "wp \"{$alias}\"" : 'wp';
+        return $alias ? "wp \"{$alias}\"" : $this->buildLocalWpCommand();
+    }
+
+    /**
+     * Build a wp command that runs in a clean environment.
+     *
+     * Nested wp-cli calls (wp acorn -> wp option get) fail on some setups
+     * because the parent process inherits env vars that poison the child's
+     * DB connection. Stripping env with `env -i` while preserving PATH + HOME
+     * gives the child a clean slate so it can re-bootstrap WordPress.
+     */
+    protected function buildLocalWpCommand(): string
+    {
+        $path = escapeshellarg(getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin');
+        $home = escapeshellarg(getenv('HOME') ?: '/tmp');
+
+        return "env -i PATH={$path} HOME={$home} wp";
     }
 
     /**
