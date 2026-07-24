@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Environment connectivity check no longer fails on fresh environments: when `option get home` reports WordPress as not installed (empty database), validation falls back to `db check` — SSH plus a reachable database is all a sync target needs. Genuinely unreachable hosts still fail.
+
 ## [2.2.0] - 2025-11-28
 
 ### Fixed

@@ -136,7 +136,9 @@ class SyncStatusCommand extends Command
                 if ($this->option('debug')) {
                     $config = Config::get("sync.environments.{$environment}");
                     $alias = $config['wp_cli_alias'] ?? 'local';
-                    $this->line("  Try running manually: <comment>wp " . ($alias !== 'local' ? $alias : '') . " option get home</comment>");
+                    $wp = 'wp' . ($alias !== 'local' ? " {$alias}" : '');
+                    $this->line("  Try running manually: <comment>{$wp} option get home</comment>");
+                    $this->line("  For a fresh environment (WordPress not installed yet): <comment>{$wp} db check</comment>");
                 }
 
                 return false;

@@ -67,19 +67,29 @@ class SyncService
     {
         $config = $this->getEnvironmentConfig($environment);
         $alias = $config['wp_cli_alias'];
-        $projectRoot = $this->getProjectRoot();
 
-        if ($alias) {
-            // For remote aliases, working directory is set below
-            $command = "wp {$alias} option get home 2>&1";
-        } else {
-            $command = $this->buildLocalWpCommand() . " option get home 2>&1";
+        $wp = $alias ? "wp {$alias}" : $this->buildLocalWpCommand();
+
+        if ($this->probe("{$wp} option get home 2>&1")) {
+            return true;
         }
 
+        // A fresh environment (empty database, WordPress not installed yet) is
+        // still a valid sync target: "option get home" fails there even though
+        // SSH and the database are reachable. "db check" probes exactly what a
+        // sync needs — a reachable database — so fall back to it.
+        return $this->probe("{$wp} db check 2>&1");
+    }
+
+    /**
+     * Run a WP-CLI probe command and report whether it succeeded cleanly.
+     */
+    protected function probe(string $command): bool
+    {
         $process = Process::fromShellCommandline($command);
 
         // Set working directory to project root so WP-CLI can find wp-cli.yml
-        $process->setWorkingDirectory($projectRoot);
+        $process->setWorkingDirectory($this->getProjectRoot());
 
         // Set reasonable timeout for remote connections (2 minutes)
         $process->setTimeout(120);
@@ -89,19 +99,16 @@ class SyncService
 
             $output = trim($process->getOutput());
             $errorOutput = trim($process->getErrorOutput());
-            $exitCode = $process->getExitCode();
 
-            // Check if successful and output doesn't contain error messages
-            $isSuccessful = $exitCode === 0 &&
-                           !empty($output) &&
-                           !str_contains(strtolower($output), 'error') &&
-                           !str_contains(strtolower($errorOutput), 'error');
-
-            return $isSuccessful;
+            // Successful and output doesn't contain error messages
+            return $process->getExitCode() === 0 &&
+                   !empty($output) &&
+                   !str_contains(strtolower($output), 'error') &&
+                   !str_contains(strtolower($errorOutput), 'error');
         } catch (\Exception $e) {
             // Process timeout or other exception
             if (function_exists('error_log')) {
-                error_log("SyncService::validateEnvironment exception: " . $e->getMessage());
+                error_log("SyncService::probe exception: " . $e->getMessage());
             }
             return false;
         }

@@ -378,6 +378,9 @@ The following sync directions are supported:
    - Verify SSH keys are properly configured
    - Check WP-CLI aliases in `wp-cli.yml`
    - Test manual WP-CLI commands: `wp @staging option get home`
+   - A fresh environment (empty database, WordPress not installed yet) counts
+     as connected: validation falls back to `wp db check`, so a first sync can
+     bootstrap it — test manually with `wp @staging db check`
 
 3. **rsync permission errors**
    - Ensure proper SSH access to remote servers
