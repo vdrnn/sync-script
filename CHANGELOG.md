@@ -2,8 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+- `--dry-run` option for `sync:env`: previews a sync without changing anything. Database commands are listed exactly as they would run (built by the same code path as the real sync), the assets step executes a read-only `rsync --dry-run` with a transfer report, and the preview names the database that a real run would reset. Exits non-zero when the preview itself fails.
+
+### Changed
+- **Breaking:** `--no-slack` and `--no-permissions` are renamed to `--skip-slack` and `--skip-permissions`. The old names never worked under `wp acorn` — WP-CLI consumes the `no-` prefix before the command sees the flag, so both aborted the command.
+- The pre-sync backup of the target database now streams to a local file (`backups/{env}-db-backup-{timestamp}.sql` in the project root) instead of being written to the remote host's working directory, where a deploy rotation could discard it. The `backup_before_sync` option is now actually honored.
+- Upload permissions are now set once per sync (previously twice), only when the local uploads tree is the sync source, and as directories `755` / files `644` instead of a blanket recursive `755` that made every uploaded file executable. `setUploadsPermissions()` was replaced by `getPermissionsCommand()` + a gated run inside `syncAssets()`.
+
 ### Fixed
-- Environment connectivity check no longer fails on fresh environments: when `option get home` reports WordPress as not installed (empty database), validation falls back to `db check` — SSH plus a reachable database is all a sync target needs. Genuinely unreachable hosts still fail.
+- Environment connectivity check no longer fails on fresh environments **used as the sync target**: when `option get home` reports WordPress as not installed (empty database), validation falls back to `db check`. A sync *source* must be a working install — previously the fallback also let an empty source pass, which would have synced an empty database over the target. Genuinely unreachable hosts still fail.
+- The database import pipeline now runs under `bash -o pipefail`: a failed source export aborts the sync instead of "succeeding" into an empty import right after the target was reset.
+- Database sync commands no longer inherit Symfony Process's 60-second timeout, which could fire mid-import after the target had already been reset (same fix rsync received earlier).
+- `search-replace` now passes `--skip-columns=guid`, per WP-CLI's own URL-migration guidance.
+- Connectivity probes now trust WP-CLI's exit code instead of scanning output for the substring "error", which produced false failures when a table name contained "error".
+- `sync:status` prints "Connectivity:" and its result on one line, and its `--debug` hint notes that local commands run through the tool's clean-environment wrapper.
 
 ## [2.2.0] - 2025-11-28
 

@@ -116,15 +116,20 @@ class SyncStatusCommand extends Command
      */
     protected function checkEnvironmentConnectivity(SyncService $syncService, string $environment): bool
     {
-        $this->line('  Connectivity: ', false);
+        // write(), not line(): line()'s second argument is a style, not a
+        // newline suppressor — this keeps "Connectivity:" and its result on
+        // one line.
+        $this->output->write('  Connectivity: ');
 
         try {
-            $result = $syncService->validateEnvironment($environment);
+            // Status is informational: a fresh environment (reachable database,
+            // WordPress not installed yet) counts as connected — it is a valid
+            // sync target.
+            $result = $syncService->validateEnvironment($environment, allowFresh: true);
 
             if ($this->option('debug')) {
                 $this->newLine();
-                $this->line('  Debug Info:', false);
-                $result ? $this->line(' validation returned true') : $this->line(' validation returned false');
+                $this->line('  Debug Info: validation returned ' . ($result ? 'true' : 'false'));
             }
 
             if ($result) {
@@ -139,6 +144,9 @@ class SyncStatusCommand extends Command
                     $wp = 'wp' . ($alias !== 'local' ? " {$alias}" : '');
                     $this->line("  Try running manually: <comment>{$wp} option get home</comment>");
                     $this->line("  For a fresh environment (WordPress not installed yet): <comment>{$wp} db check</comment>");
+                    if ($alias === 'local') {
+                        $this->line('  Note: the tool itself runs local commands through a clean environment (env -i PATH=… HOME=… wp …), which can behave differently from your shell.');
+                    }
                 }
 
                 return false;

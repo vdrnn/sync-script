@@ -62,8 +62,13 @@ class SyncService
 
     /**
      * Validate environment connectivity.
+     *
+     * With $allowFresh, an environment whose database is reachable but where
+     * WordPress is not installed yet (empty database) also counts as valid.
+     * That is only safe for a sync TARGET — a fresh source would sync an empty
+     * database over the target — so callers must pass it deliberately.
      */
-    public function validateEnvironment(string $environment): bool
+    public function validateEnvironment(string $environment, bool $allowFresh = false): bool
     {
         $config = $this->getEnvironmentConfig($environment);
         $alias = $config['wp_cli_alias'];
@@ -74,15 +79,18 @@ class SyncService
             return true;
         }
 
-        // A fresh environment (empty database, WordPress not installed yet) is
-        // still a valid sync target: "option get home" fails there even though
-        // SSH and the database are reachable. "db check" probes exactly what a
-        // sync needs — a reachable database — so fall back to it.
-        return $this->probe("{$wp} db check 2>&1");
+        // "option get home" fails on a fresh environment even though SSH and
+        // the database are reachable. "db check" probes exactly what a sync
+        // target needs — a reachable database — so fall back to it.
+        return $allowFresh && $this->probe("{$wp} db check 2>&1");
     }
 
     /**
      * Run a WP-CLI probe command and report whether it succeeded cleanly.
+     *
+     * WP-CLI exits non-zero on errors, so the exit code is authoritative.
+     * The non-empty check guards against a probe that silently produced
+     * nothing (e.g. a misconfigured alias resolving to a no-op).
      */
     protected function probe(string $command): bool
     {
@@ -97,14 +105,8 @@ class SyncService
         try {
             $process->run();
 
-            $output = trim($process->getOutput());
-            $errorOutput = trim($process->getErrorOutput());
-
-            // Successful and output doesn't contain error messages
             return $process->getExitCode() === 0 &&
-                   !empty($output) &&
-                   !str_contains(strtolower($output), 'error') &&
-                   !str_contains(strtolower($errorOutput), 'error');
+                   trim($process->getOutput()) !== '';
         } catch (\Exception $e) {
             // Process timeout or other exception
             if (function_exists('error_log')) {
@@ -119,6 +121,40 @@ class SyncService
      */
     public function syncDatabase(string $from, string $to, bool $useLocal = false): bool
     {
+        if (Config::get('sync.options.backup_before_sync', true)) {
+            $backupsDir = $this->getProjectRoot() . '/backups';
+            if (!is_dir($backupsDir)) {
+                mkdir($backupsDir, 0755, true);
+            }
+        }
+
+        foreach ($this->getDatabaseSyncCommands($from, $to, $useLocal) as $label => $command) {
+            $process = Process::fromShellCommandline($command);
+            $process->setWorkingDirectory($this->getProjectRoot());
+
+            // No timeout: database dumps routinely exceed Symfony's 60s
+            // default, and a timeout after "db reset" would strand the target
+            // half-synced (same reasoning as the rsync fix in 6477e2f).
+            $process->setTimeout(null);
+
+            $process->run();
+
+            if (!$process->isSuccessful()) {
+                throw new Exception("{$label} failed: " . $process->getErrorOutput());
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Build the ordered list of commands a database sync would execute.
+     *
+     * Shared by the real sync and --dry-run so the preview can never drift
+     * from what actually runs.
+     */
+    public function getDatabaseSyncCommands(string $from, string $to, bool $useLocal = false): array
+    {
         $fromConfig = $this->getEnvironmentConfig($from);
         $toConfig = $this->getEnvironmentConfig($to);
         $charset = Config::get('sync.options.database_charset', 'utf8mb4');
@@ -127,83 +163,123 @@ class SyncService
         $fromCmd = $this->getWpCliCommand($from, $useLocal);
         $toCmd = $this->getWpCliCommand($to, $useLocal);
 
-        $workingDir = $this->getProjectRoot();
+        $commands = [];
 
-        // Export backup of target database
-        $backupProcess = Process::fromShellCommandline("{$toCmd} db export --default-character-set={$charset}");
-        $backupProcess->setWorkingDirectory($workingDir);
-        $backupProcess->run();
-        if (!$backupProcess->isSuccessful()) {
-            throw new Exception("Failed to backup {$to} database: " . $backupProcess->getErrorOutput());
+        if (Config::get('sync.options.backup_before_sync', true)) {
+            // Streamed to a LOCAL file: a dump left on the host that is about
+            // to be reset — or inside a rotating deploy release — is not a
+            // safety net.
+            $backupFile = 'backups/' . $to . '-db-backup-' . date('Y-m-d-His') . '.sql';
+            $commands["Backup of {$to} database to {$backupFile}"] =
+                "{$toCmd} db export --default-character-set={$charset} - > {$backupFile}";
         }
 
-        // Reset target database
-        $resetProcess = Process::fromShellCommandline("{$toCmd} db reset --yes");
-        $resetProcess->setWorkingDirectory($workingDir);
-        $resetProcess->run();
-        if (!$resetProcess->isSuccessful()) {
-            throw new Exception("Failed to reset {$to} database: " . $resetProcess->getErrorOutput());
-        }
+        $commands["Reset of {$to} database"] = "{$toCmd} db reset --yes";
 
-        // Import from source to target
-        $importProcess = Process::fromShellCommandline("{$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import -");
-        $importProcess->setWorkingDirectory($workingDir);
-        $importProcess->run();
-        if (!$importProcess->isSuccessful()) {
-            throw new Exception("Failed to import database: " . $importProcess->getErrorOutput());
-        }
+        // Run the pipeline under bash with pipefail: /bin/sh reports only the
+        // LAST command's status, so a failed source export would otherwise
+        // "succeed" into an empty import right after the target was reset.
+        $pipeline = "set -o pipefail; {$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import -";
+        $commands["Import of {$from} database into {$to}"] = 'bash -c ' . escapeshellarg($pipeline);
 
-        // Search and replace URLs
-        $searchReplaceProcess = Process::fromShellCommandline("{$toCmd} search-replace \"{$fromConfig['url']}\" \"{$toConfig['url']}\" --all-tables-with-prefix");
-        $searchReplaceProcess->setWorkingDirectory($workingDir);
-        $searchReplaceProcess->run();
-        if (!$searchReplaceProcess->isSuccessful()) {
-            throw new Exception("Failed to search-replace URLs: " . $searchReplaceProcess->getErrorOutput());
-        }
+        // guid is a permanent post identifier consumed by feed readers —
+        // WP-CLI's own URL-migration recipe skips it.
+        $commands["URL rewrite {$fromConfig['url']} → {$toConfig['url']}"] =
+            "{$toCmd} search-replace \"{$fromConfig['url']}\" \"{$toConfig['url']}\" --skip-columns=guid --all-tables-with-prefix";
 
-        return true;
+        return $commands;
     }
 
     /**
      * Sync assets between environments.
      */
-    public function syncAssets(string $from, string $to): bool
+    public function syncAssets(string $from, string $to, bool $setPermissions = true): bool
+    {
+        if ($setPermissions && ($permissions = $this->getPermissionsCommand($from, $to))) {
+            // Best-effort, as before — a chmod failure should not abort the sync
+            $process = Process::fromShellCommandline($permissions);
+            $process->setWorkingDirectory($this->getProjectRoot());
+            $process->run();
+        }
+
+        return $this->runAssetsCommand($this->getAssetsSyncCommand($from, $to));
+    }
+
+    /**
+     * Build the permissions command an assets sync would run, or null when no
+     * chmod applies to this sync. Shared by the real sync and --dry-run.
+     */
+    public function getPermissionsCommand(string $from, string $to): ?string
+    {
+        if (!Config::get('sync.options.set_upload_permissions', true)) {
+            return null;
+        }
+
+        // rsync -a preserves source modes, so fixing the local tree only
+        // matters when it IS the source ("up"). On a down or horizontal sync
+        // the chmod would be overwritten or irrelevant.
+        if ($this->getSyncDirection($from, $to) !== 'up') {
+            return null;
+        }
+
+        $path = $this->getUploadsPathForStructure($this->detectProjectStructure());
+        $dirPermissions = Config::get('sync.options.upload_permissions', '755');
+
+        // Directories {$dirPermissions}, files 644 — a blanket recursive chmod
+        // would make every uploaded file executable.
+        return "find {$path} -type d -exec chmod {$dirPermissions} {} + && find {$path} -type f -exec chmod 644 {} +";
+    }
+
+    /**
+     * Build the rsync command an assets sync would execute.
+     *
+     * Shared by the real sync and --dry-run so the preview can never drift
+     * from what actually runs. With $dryRun, rsync gets --dry-run --stats
+     * (and loses --progress) so it reports what would transfer without
+     * writing anything.
+     */
+    public function getAssetsSyncCommand(string $from, string $to, bool $dryRun = false): string
     {
         $fromConfig = $this->getEnvironmentConfig($from);
         $toConfig = $this->getEnvironmentConfig($to);
+
+        if ($this->getSyncDirection($from, $to) === 'horizontal') {
+            return $this->buildHorizontalSyncCommand($fromConfig, $toConfig, $dryRun);
+        }
+
         $rsyncOptions = Config::get('sync.options.rsync_options', '-az --progress');
-
-        // Set permissions if enabled
-        if (Config::get('sync.options.set_upload_permissions', true)) {
-            $this->setUploadsPermissions();
+        if ($dryRun) {
+            $rsyncOptions = trim(str_replace('--progress', '', $rsyncOptions)) . ' --dry-run --stats';
         }
 
-        $syncDirection = $this->getSyncDirection($from, $to);
-
-        if ($syncDirection === 'horizontal') {
-            return $this->performHorizontalSync($fromConfig, $toConfig, $rsyncOptions);
-        } else {
-            return $this->performDirectSync($fromConfig, $toConfig, $rsyncOptions);
-        }
+        return $this->buildDirectSyncCommand($fromConfig, $toConfig, $rsyncOptions);
     }
 
     /**
-     * Set upload directory permissions.
+     * Run the assets sync as an rsync dry run.
+     *
+     * @return array{success: bool, output: string} the transfer report and
+     *         whether rsync itself succeeded — a failed preview must not be
+     *         mistaken for a clean one.
      */
-    public function setUploadsPermissions(string $path = 'web/app/uploads/'): bool
+    public function dryRunAssets(string $from, string $to): array
     {
-        $permissions = Config::get('sync.options.upload_permissions', '755');
-        $process = Process::fromShellCommandline("chmod -R {$permissions} {$path}");
-        $process->setWorkingDirectory($this->getProjectRoot());
-        $process->run();
+        $output = '';
 
-        return $process->isSuccessful();
+        $success = $this->runAssetsCommand(
+            $this->getAssetsSyncCommand($from, $to, true),
+            function ($type, $buffer) use (&$output) {
+                $output .= $buffer;
+            }
+        );
+
+        return ['success' => $success, 'output' => $output];
     }
 
     /**
-     * Perform horizontal sync (server to server).
+     * Build the horizontal sync command (server to server).
      */
-    protected function performHorizontalSync(array $fromConfig, array $toConfig, string $rsyncOptions): bool
+    protected function buildHorizontalSyncCommand(array $fromConfig, array $toConfig, bool $dryRun = false): string
     {
         $fromParts = $this->parseRemotePath($fromConfig['uploads_path']);
         $toParts = $this->parseRemotePath($toConfig['uploads_path']);
@@ -215,24 +291,15 @@ class SyncService
         $fromSshPort = $fromPort !== '22' ? "-p {$fromPort}" : '';
         $toSshPort = $toPort !== '22' ? "-p {$toPort}" : '';
 
-        $command = "ssh {$fromSshPort} -o ForwardAgent=yes {$fromParts['host']} \"rsync -aze 'ssh {$sshOptions} {$toSshPort}' --progress {$fromParts['path']} {$toParts['host']}:{$toParts['path']}\"";
+        $rsyncFlags = $dryRun ? '--dry-run --stats' : '--progress';
 
-        $process = Process::fromShellCommandline($command);
-        $process->setWorkingDirectory($this->getProjectRoot());
-        $process->setTimeout(null); // No timeout for large file transfers
-
-        // Run with output callback to prevent blocking on large transfers
-        $process->run(function ($type, $buffer) {
-            // Consume output to prevent pipe blocking
-        });
-
-        return $process->isSuccessful();
+        return "ssh {$fromSshPort} -o ForwardAgent=yes {$fromParts['host']} \"rsync -aze 'ssh {$sshOptions} {$toSshPort}' {$rsyncFlags} {$fromParts['path']} {$toParts['host']}:{$toParts['path']}\"";
     }
 
     /**
-     * Perform direct sync (local to remote or remote to local).
+     * Build the direct sync command (local to remote or remote to local).
      */
-    protected function performDirectSync(array $fromConfig, array $toConfig, string $rsyncOptions): bool
+    protected function buildDirectSyncCommand(array $fromConfig, array $toConfig, string $rsyncOptions): string
     {
         $fromPath = $fromConfig['uploads_path'];
         $toPath = $toConfig['uploads_path'];
@@ -249,12 +316,20 @@ class SyncService
             $rsyncOptions .= " -e 'ssh -p {$sshPort}'";
         }
 
-        $process = Process::fromShellCommandline("rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"");
+        return "rsync {$rsyncOptions} \"{$fromPath}\" \"{$toPath}\"";
+    }
+
+    /**
+     * Execute a (possibly long-running) assets command.
+     */
+    protected function runAssetsCommand(string $command, ?callable $output = null): bool
+    {
+        $process = Process::fromShellCommandline($command);
         $process->setWorkingDirectory($this->getProjectRoot());
         $process->setTimeout(null); // No timeout for large file transfers
 
-        // Run with output callback to prevent blocking on large transfers
-        $process->run(function ($type, $buffer) {
+        // Run with output callback to prevent pipe blocking on large transfers
+        $process->run($output ?? function ($type, $buffer) {
             // Consume output to prevent pipe blocking
         });
 

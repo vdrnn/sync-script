@@ -18,8 +18,9 @@ class SyncEnvironmentCommand extends Command
                            {--skip-db : Skip database synchronization}
                            {--skip-assets : Skip assets synchronization}
                            {--local : Use local WP-CLI for development environment}
-                           {--no-slack : Skip Slack notification}
-                           {--no-permissions : Skip setting upload permissions}
+                           {--skip-slack : Skip Slack notification}
+                           {--skip-permissions : Skip setting upload permissions}
+                           {--dry-run : Preview the commands a sync would run, without executing anything}
                            {--force : Skip confirmation prompts}';
 
     /**
@@ -45,6 +46,11 @@ class SyncEnvironmentCommand extends Command
             return 1;
         }
 
+        // Preview only — nothing below this point runs
+        if ($this->option('dry-run')) {
+            return $this->performDryRun($syncService, $from, $to);
+        }
+
         // Show sync preview and get confirmation
         if (!$this->option('force') && !$this->confirmSync($from, $to)) {
             $this->info('Sync cancelled.');
@@ -56,7 +62,7 @@ class SyncEnvironmentCommand extends Command
             $this->performSync($syncService, $from, $to);
 
             // Send Slack notification if enabled
-            if (!$this->option('no-slack')) {
+            if (!$this->option('skip-slack')) {
                 $syncService->sendSlackNotification($from, $to);
             }
 
@@ -70,6 +76,93 @@ class SyncEnvironmentCommand extends Command
         }
 
         return 0;
+    }
+
+    /**
+     * Show what a sync would execute, without running any of it.
+     *
+     * Database commands are only listed (they are destructive); the assets
+     * step runs as a real rsync --dry-run, which is read-only and reports
+     * what would actually transfer. Exits non-zero when the preview itself
+     * fails, so scripts cannot mistake a broken preview for a clean one.
+     */
+    protected function performDryRun(SyncService $syncService, string $from, string $to): int
+    {
+        try {
+            return $this->renderDryRun($syncService, $from, $to);
+        } catch (\Throwable $e) {
+            $this->error('❌ Dry run failed: ' . $e->getMessage());
+            return 1;
+        }
+    }
+
+    /**
+     * Render the dry-run preview. Extracted so performDryRun can wrap it in
+     * error handling matching the real sync path.
+     */
+    protected function renderDryRun(SyncService $syncService, string $from, string $to): int
+    {
+        if ($this->option('skip-db') && $this->option('skip-assets')) {
+            $this->warn('Nothing to preview (both database and assets are skipped).');
+            return 1;
+        }
+
+        $toConfig = Config::get("sync.environments.{$to}");
+
+        $this->newLine();
+        $this->info("🔍 Dry run {$from} → {$to} — nothing will be changed.");
+        if (!$this->option('skip-db')) {
+            $this->warn("⚠️  A real run would RESET and overwrite the {$to} database at {$toConfig['url']}.");
+        }
+
+        if (!$this->option('skip-db')) {
+            $this->newLine();
+            $this->info('📊 Database commands that would run (in order):');
+            foreach ($syncService->getDatabaseSyncCommands($from, $to, $this->option('local')) as $label => $command) {
+                $this->line("  • {$label}:");
+                $this->line('    <comment>' . $this->compactCommand($command) . '</comment>');
+            }
+        }
+
+        if (!$this->option('skip-assets')) {
+            $this->newLine();
+            $this->info('📁 Assets commands that would run:');
+            if (!$this->option('skip-permissions') && ($permissions = $syncService->getPermissionsCommand($from, $to))) {
+                $this->line("  • Set local uploads permissions: <comment>{$permissions}</comment>");
+            }
+            $this->line('  • Transfer: <comment>' . $syncService->getAssetsSyncCommand($from, $to) . '</comment>');
+
+            $this->newLine();
+            $this->info('📁 Transfer preview (rsync --dry-run):');
+            $preview = $syncService->dryRunAssets($from, $to);
+            $report = trim($preview['output']);
+
+            if (!$preview['success']) {
+                $this->error('❌ The rsync dry run failed:');
+                $this->line($report !== '' ? $report : '(no output)');
+                $this->newLine();
+                $this->error("❌ Dry run aborted — a real sync's assets step would fail the same way.");
+                return 1;
+            }
+
+            $this->line($report !== '' ? $report : '(rsync reported nothing to compare)');
+        }
+
+        $this->newLine();
+        $this->info('✅ Dry run complete — no changes were made.');
+
+        return 0;
+    }
+
+    /**
+     * Elide the inlined PATH of the local WP-CLI wrapper for display only —
+     * the executed command is untouched.
+     */
+    protected function compactCommand(string $command): string
+    {
+        $path = getenv('PATH');
+
+        return $path ? str_replace($path, '…', $command) : $command;
     }
 
     /**
@@ -123,15 +216,17 @@ class SyncEnvironmentCommand extends Command
     {
         $this->info('🔍 Checking environment connectivity...');
 
-        // Check source environment
+        // The source must be a working WordPress install — syncing from a
+        // fresh/empty environment would overwrite the target with nothing.
         if (!$syncService->validateEnvironment($from)) {
-            $this->error("❌ Unable to connect to {$from} environment");
+            $this->error("❌ Unable to connect to {$from} environment (a sync source needs a working WordPress install)");
             return false;
         }
         $this->line("✅ Able to connect to {$from}");
 
-        // Check target environment
-        if (!$syncService->validateEnvironment($to)) {
+        // The target only needs a reachable database — a fresh environment
+        // is bootstrapped by its first sync.
+        if (!$syncService->validateEnvironment($to, allowFresh: true)) {
             $this->error("❌ Unable to connect to {$to} environment");
             return false;
         }
@@ -196,13 +291,10 @@ class SyncEnvironmentCommand extends Command
         if (!$this->option('skip-assets')) {
             $this->info('📁 Syncing assets...');
 
-            // Set permissions if not disabled
-            if (!$this->option('no-permissions')) {
-                $syncService->setUploadsPermissions();
-            }
+            $setPermissions = !$this->option('skip-permissions');
 
-            $this->executeWithProgress(function () use ($syncService, $from, $to) {
-                $syncService->syncAssets($from, $to);
+            $this->executeWithProgress(function () use ($syncService, $from, $to, $setPermissions) {
+                $syncService->syncAssets($from, $to, $setPermissions);
             });
             $this->newLine();
             $this->line('✅ Assets sync complete');

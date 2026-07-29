@@ -13,6 +13,7 @@ WordPress environment synchronization for Bedrock and Radicle projects. Sync dat
 - 🤖 **Auto-detection** - Reads existing wp-cli.yml configuration
 - 🔌 **SSH port support** - Works with custom ports (Kinsta, managed hosting)
 - 📊 **Status monitoring** - Check environment connectivity before syncing
+- 🔎 **Dry-run mode** - Preview the exact commands and transfer report without changing anything
 - 🎛️ **Configuration CLI** - View and edit settings via command line
 - 🔔 **Slack notifications** - Optional sync completion alerts
 - 🛡️ **Safety first** - Confirmation prompts and automatic backups
@@ -166,14 +167,22 @@ wp acorn sync:env {from} {to} [options]
 - `--skip-db` - Skip database synchronization
 - `--skip-assets` - Skip assets synchronization
 - `--local` - Use local WP-CLI for development environment
-- `--no-slack` - Skip Slack notification
-- `--no-permissions` - Skip setting upload permissions
+- `--skip-slack` - Skip Slack notification
+- `--skip-permissions` - Skip setting upload permissions
+- `--dry-run` - Preview a sync without changing anything: lists the exact database commands and runs the assets step as a real `rsync --dry-run` with a transfer report. Exits non-zero when the preview itself fails, so it is safe to script as a pre-flight gate.
 - `--force` - Skip confirmation prompts
+
+> **Note:** `--no-*` option names cannot be used under `wp acorn` — WP-CLI consumes the `no-` prefix before the command sees it. That is why the skip options are all spelled `--skip-*`.
+
+Before the reset step, the target database is exported to `backups/{env}-db-backup-{timestamp}.sql` in the local project root (disable via the `backup_before_sync` option).
 
 **Examples:**
 ```bash
 # Sync everything from production to development
 wp acorn sync:env production development
+
+# Preview what a sync would do, without executing it
+wp acorn sync:env production development --dry-run
 
 # Sync only database from staging to development
 wp acorn sync:env staging development --skip-assets
@@ -379,8 +388,10 @@ The following sync directions are supported:
    - Check WP-CLI aliases in `wp-cli.yml`
    - Test manual WP-CLI commands: `wp @staging option get home`
    - A fresh environment (empty database, WordPress not installed yet) counts
-     as connected: validation falls back to `wp db check`, so a first sync can
-     bootstrap it — test manually with `wp @staging db check`
+     as connected **as a sync target only**: validation falls back to `wp db check`,
+     so a first sync can bootstrap it — test manually with `wp @staging db check`.
+     A sync *source* must always be a working WordPress install; syncing from a
+     fresh environment would overwrite the target with an empty database.
 
 3. **rsync permission errors**
    - Ensure proper SSH access to remote servers
@@ -402,11 +413,10 @@ The following sync directions are supported:
 For detailed debugging information during status checks:
 
 ```bash
-# Use the --debug flag for detailed connectivity diagnostics
-wp acorn sync:status --debug
-
-# Use -v flag for verbose sync output
-wp acorn sync:env production development -v
+# Use the --debug flag for detailed connectivity diagnostics.
+# The `--` separator is required: without it, WP-CLI consumes --debug
+# as its own global flag and the command never sees it.
+wp acorn sync:status -- --debug
 ```
 
 The `--debug` flag shows:
@@ -437,7 +447,6 @@ Planned features for future releases:
 - Kinsta hosting validation & testing
 - Multisite support
 - Selective table sync
-- Dry-run mode
 - Sync progress notifications
 - Pre/post sync hooks
 
