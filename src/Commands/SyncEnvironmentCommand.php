@@ -17,7 +17,7 @@ class SyncEnvironmentCommand extends Command
                            {to : Target environment (development, staging, production)}
                            {--skip-db : Skip database synchronization}
                            {--skip-assets : Skip assets synchronization}
-                           {--local : Use local WP-CLI for development environment}
+                           {--local : Force local WP-CLI for development even when a @development SSH alias is configured}
                            {--skip-slack : Skip Slack notification}
                            {--skip-permissions : Skip setting upload permissions}
                            {--dry-run : Preview the commands a sync would run, without executing anything}
@@ -266,6 +266,12 @@ class SyncEnvironmentCommand extends Command
         if ($this->option('skip-db') && $this->option('skip-assets')) {
             $this->warn('Nothing to synchronize (both database and assets are skipped).');
             return false;
+        }
+
+        // The preview above always shows; the prompt itself can be disabled
+        // via config (previously this key was documented but never read).
+        if (!Config::get('sync.options.confirm_destructive_operations', true)) {
+            return true;
         }
 
         $this->newLine();

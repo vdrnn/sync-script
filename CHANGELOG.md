@@ -6,11 +6,16 @@
 - `--dry-run` option for `sync:env`: previews a sync without changing anything. Database commands are listed exactly as they would run (built by the same code path as the real sync), the assets step executes a read-only `rsync --dry-run` with a transfer report, and the preview names the database that a real run would reset. Exits non-zero when the preview itself fails.
 
 ### Changed
+- The package's default `config/sync.php` now reads the same `SYNC_{ENVIRONMENT}_{KEY}` env names that `sync:init` generates and the README documents (`SYNC_DEVELOPMENT_URL`/`SYNC_PRODUCTION_URL` instead of the outlier `SYNC_DEV_URL`/`SYNC_PROD_URL`). Projects with a published config are unaffected.
 - **Breaking:** `--no-slack` and `--no-permissions` are renamed to `--skip-slack` and `--skip-permissions`. The old names never worked under `wp acorn` — WP-CLI consumes the `no-` prefix before the command sees the flag, so both aborted the command.
 - The pre-sync backup of the target database now streams to a local file (`backups/{env}-db-backup-{timestamp}.sql` in the project root) instead of being written to the remote host's working directory, where a deploy rotation could discard it. The `backup_before_sync` option is now actually honored.
 - Upload permissions are now set once per sync (previously twice), only when the local uploads tree is the sync source, and as directories `755` / files `644` instead of a blanket recursive `755` that made every uploaded file executable. `setUploadsPermissions()` was replaced by `getPermissionsCommand()` + a gated run inside `syncAssets()`.
 
 ### Fixed
+- The URL rewrite now runs additional passes beyond the exact URL: JSON-escaped URLs (Gutenberg block attributes), the alternate-scheme absolute form, and protocol-relative `//host` occurrences. Scheme-ful passes run first so the protocol-relative pass only sees what they left behind; identical search/replace pairs are dropped.
+- `db import` now receives the same `--default-character-set` as the export — the two ends of the pipeline can no longer disagree on charset.
+- The sync aborts with a clear message when source and target table prefixes differ (`wp db prefix` probe) — previously `search-replace --all-tables-with-prefix` would have silently rewritten nothing after the import.
+- `confirm_destructive_operations` is now honored: setting it to `false` skips the confirmation prompt (the preview still prints). Previously the key was documented but never read.
 - Environment connectivity check no longer fails on fresh environments **used as the sync target**: when `option get home` reports WordPress as not installed (empty database), validation falls back to `db check`. A sync *source* must be a working install — previously the fallback also let an empty source pass, which would have synced an empty database over the target. Genuinely unreachable hosts still fail.
 - The database import pipeline now runs under `bash -o pipefail`: a failed source export aborts the sync instead of "succeeding" into an empty import right after the target was reset.
 - Database sync commands no longer inherit Symfony Process's 60-second timeout, which could fire mid-import after the target had already been reset (same fix rsync received earlier).

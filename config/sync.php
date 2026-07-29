@@ -12,8 +12,8 @@ return [
     */
     'environments' => [
         'development' => [
-            'url' => env('SYNC_DEV_URL', 'https://example.test'),
-            'uploads_path' => env('SYNC_DEV_UPLOADS_PATH', 'web/app/uploads/'),
+            'url' => env('SYNC_DEVELOPMENT_URL', 'https://example.test'),
+            'uploads_path' => env('SYNC_DEVELOPMENT_UPLOADS_PATH', 'web/app/uploads/'),
             'wp_cli_alias' => null, // Local environment
         ],
         'staging' => [
@@ -25,11 +25,11 @@ return [
             'remote_path' => null, // Will be extracted from uploads_path
         ],
         'production' => [
-            'url' => env('SYNC_PROD_URL'),
-            'uploads_path' => env('SYNC_PROD_UPLOADS_PATH'),
+            'url' => env('SYNC_PRODUCTION_URL'),
+            'uploads_path' => env('SYNC_PRODUCTION_UPLOADS_PATH'),
             'wp_cli_alias' => '@production',
             'ssh_host' => null, // Will be extracted from uploads_path
-            'ssh_port' => env('SYNC_PROD_SSH_PORT', '22'),
+            'ssh_port' => env('SYNC_PRODUCTION_SSH_PORT', '22'),
             'remote_path' => null, // Will be extracted from uploads_path
         ],
     ],

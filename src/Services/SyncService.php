@@ -121,6 +121,8 @@ class SyncService
      */
     public function syncDatabase(string $from, string $to, bool $useLocal = false): bool
     {
+        $this->assertMatchingTablePrefixes($from, $to, $useLocal);
+
         if (Config::get('sync.options.backup_before_sync', true)) {
             $backupsDir = $this->getProjectRoot() . '/backups';
             if (!is_dir($backupsDir)) {
@@ -179,15 +181,108 @@ class SyncService
         // Run the pipeline under bash with pipefail: /bin/sh reports only the
         // LAST command's status, so a failed source export would otherwise
         // "succeed" into an empty import right after the target was reset.
-        $pipeline = "set -o pipefail; {$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import -";
+        // The charset is forced on BOTH ends (db import passes it through to
+        // the mysql client) so export and import cannot disagree.
+        $pipeline = "set -o pipefail; {$fromCmd} db export --default-character-set={$charset} - | {$toCmd} db import - --default-character-set={$charset}";
         $commands["Import of {$from} database into {$to}"] = 'bash -c ' . escapeshellarg($pipeline);
 
         // guid is a permanent post identifier consumed by feed readers —
         // WP-CLI's own URL-migration recipe skips it.
-        $commands["URL rewrite {$fromConfig['url']} → {$toConfig['url']}"] =
-            "{$toCmd} search-replace \"{$fromConfig['url']}\" \"{$toConfig['url']}\" --skip-columns=guid --all-tables-with-prefix";
+        foreach ($this->getUrlReplacements($fromConfig['url'], $toConfig['url']) as $label => $pair) {
+            $commands[$label] =
+                "{$toCmd} search-replace \"{$pair[0]}\" \"{$pair[1]}\" --skip-columns=guid --all-tables-with-prefix";
+        }
 
         return $commands;
+    }
+
+    /**
+     * Abort when source and target use different table prefixes: the imported
+     * tables would carry the source's prefix while search-replace
+     * --all-tables-with-prefix resolves the target's, silently rewriting
+     * nothing.
+     */
+    protected function assertMatchingTablePrefixes(string $from, string $to, bool $useLocal = false): void
+    {
+        $fromPrefix = $this->getTablePrefix($this->getWpCliCommand($from, $useLocal));
+        $toPrefix = $this->getTablePrefix($this->getWpCliCommand($to, $useLocal));
+
+        if ($fromPrefix === null || $toPrefix === null) {
+            return; // Unable to determine — don't block the sync on a probe failure
+        }
+
+        if ($fromPrefix !== $toPrefix) {
+            throw new Exception(
+                "Table prefix mismatch: {$from} uses '{$fromPrefix}' but {$to} uses '{$toPrefix}' — " .
+                "after import, the URL rewrite (--all-tables-with-prefix) would silently miss every imported table."
+            );
+        }
+    }
+
+    /**
+     * The environment's table prefix via `wp db prefix`, or null when the
+     * probe fails.
+     */
+    protected function getTablePrefix(string $wpCommand): ?string
+    {
+        $process = Process::fromShellCommandline("{$wpCommand} db prefix 2>/dev/null");
+        $process->setWorkingDirectory($this->getProjectRoot());
+        $process->setTimeout(120);
+        $process->run();
+
+        $prefix = trim($process->getOutput());
+
+        return $process->isSuccessful() && $prefix !== '' ? $prefix : null;
+    }
+
+    /**
+     * Build the ordered search/replace pairs for a URL migration.
+     *
+     * Beyond the exact URL, content stores JSON-escaped URLs (Gutenberg block
+     * attributes — search-replace unserializes PHP but does not unescape
+     * JSON), alternate-scheme absolute URLs, and protocol-relative ones. The
+     * scheme-ful passes run first so the final protocol-relative pass only
+     * sees what they left behind.
+     */
+    public function getUrlReplacements(string $fromUrl, string $toUrl): array
+    {
+        $pairs = [
+            "URL rewrite {$fromUrl} → {$toUrl}" => [$fromUrl, $toUrl],
+            'URL rewrite (JSON-escaped)' => [str_replace('/', '\/', $fromUrl), str_replace('/', '\/', $toUrl)],
+        ];
+
+        $fromAuthority = $this->urlAuthority($fromUrl);
+        $toAuthority = $this->urlAuthority($toUrl);
+
+        if ($fromAuthority !== null && $toAuthority !== null) {
+            $altScheme = (parse_url($fromUrl, PHP_URL_SCHEME) ?: 'https') === 'https' ? 'http' : 'https';
+            $toScheme = parse_url($toUrl, PHP_URL_SCHEME) ?: 'https';
+
+            // Replace authority-for-authority, NOT with the full target URL:
+            // on a subdirectory install (https://ex.com/blog) the full URL
+            // would double the path (…/blog/blog/…).
+            $pairs["URL rewrite ({$altScheme}:// variant)"] = ["{$altScheme}://{$fromAuthority}", "{$toScheme}://{$toAuthority}"];
+            $pairs['URL rewrite (protocol-relative)'] = ["//{$fromAuthority}", "//{$toAuthority}"];
+        }
+
+        // Identical pairs would churn every table for nothing — drop them.
+        return array_filter($pairs, fn ($pair) => $pair[0] !== $pair[1]);
+    }
+
+    /**
+     * host[:port] of a URL, or null when it has no parsable host.
+     */
+    protected function urlAuthority(string $url): ?string
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+
+        if (!$host) {
+            return null;
+        }
+
+        $port = parse_url($url, PHP_URL_PORT);
+
+        return $host . ($port ? ":{$port}" : '');
     }
 
     /**

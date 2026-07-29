@@ -166,7 +166,7 @@ wp acorn sync:env {from} {to} [options]
 **Options:**
 - `--skip-db` - Skip database synchronization
 - `--skip-assets` - Skip assets synchronization
-- `--local` - Use local WP-CLI for development environment
+- `--local` - Force local WP-CLI for development even when a `@development` SSH alias is configured (no effect when development already has no alias)
 - `--skip-slack` - Skip Slack notification
 - `--skip-permissions` - Skip setting upload permissions
 - `--dry-run` - Preview a sync without changing anything: lists the exact database commands and runs the assets step as a real `rsync --dry-run` with a transfer report. Exits non-zero when the preview itself fails, so it is safe to script as a pre-flight gate.
